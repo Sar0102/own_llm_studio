@@ -349,11 +349,40 @@ async def chat(req: ChatRequest):
         if session:
             db_messages = session.messages
 
-    # 2. Если истории в БД нет — используем messages из запроса (fallback)
-    all_messages = db_messages if db_messages else [
-        type("M", (), {"role": m.role, "content": m.content})()
-        for m in req.messages
-    ]
+    # 2. Формируем полную историю:
+    #    db_messages (старая история из БД) + новое сообщение из запроса
+    #
+    #    Новое сообщение НЕ в БД — оно сохраняется только после генерации.
+    #    Поэтому берём последнее user-сообщение из req.messages и добавляем явно.
+    if db_messages:
+        # Берём только последнее user-сообщение из запроса (новый вопрос)
+        new_user_msg = next(
+            (m for m in reversed(req.messages) if m.role == "user"), None
+        )
+        if new_user_msg:
+            # Проверяем что его ещё нет в БД (не дублируем)
+            last_db = db_messages[-1] if db_messages else None
+            already_saved = (
+                last_db and
+                last_db.role == "user" and
+                last_db.content == new_user_msg.content
+            )
+            if not already_saved:
+                # Добавляем новое сообщение к истории из БД
+                from chat_store import Message as DbMessage
+                all_messages = list(db_messages) + [
+                    DbMessage(role="user", content=new_user_msg.content)
+                ]
+            else:
+                all_messages = list(db_messages)
+        else:
+            all_messages = list(db_messages)
+    else:
+        # Fallback — нет истории в БД, используем сообщения из запроса
+        all_messages = [
+            type("M", (), {"role": m.role, "content": m.content})()
+            for m in req.messages
+        ]
 
     # 3. Оптимизируем контекст через ContextManager
     n_ctx = llm_manager.model_info.config.n_ctx if llm_manager.is_loaded else 8192
@@ -395,10 +424,9 @@ async def chat(req: ChatRequest):
     if session_id:
         _active_generations[session_id] = cancel_event
 
-    # user_text — последнее user-сообщение для сохранения пары в БД
+    # user_text — новое сообщение пользователя для сохранения пары в БД
     user_text = next(
-        (m["content"] for m in reversed(optimized_messages) if m["role"] == "user"),
-        "",
+        (m.content for m in reversed(req.messages) if m.role == "user"), ""
     )
 
     async def token_generator():
