@@ -395,6 +395,26 @@ async def chat(req: ChatRequest):
 
     optimized_messages = ctx_result.messages
 
+    # ── DEBUG LOG — что передаётся в LLM ─────────────────────────────────────
+    import logging
+    logger = logging.getLogger("llm_input")
+    logging.basicConfig(
+        level=logging.DEBUG,
+        format="%(asctime)s [%(name)s] %(message)s",
+        datefmt="%H:%M:%S",
+    )
+    logger.debug("=" * 60)
+    logger.debug(f"SESSION:      {req.session_id}")
+    logger.debug(f"DB messages:  {len(db_messages)}")
+    logger.debug(f"All messages: {len(all_messages)}")
+    logger.debug(f"After ctx_mgr:{len(optimized_messages)} (budget: {ctx_result.total_tokens} tokens, compressed: {ctx_result.was_compressed})")
+    logger.debug("─── Messages sent to LLM ───")
+    for i, m in enumerate(optimized_messages):
+        preview = m["content"][:120].replace("\n", "↵")
+        logger.debug(f"  [{i}] {m['role'].upper():12} | {preview}")
+    logger.debug("=" * 60)
+    # ─────────────────────────────────────────────────────────────────────────
+
     # 4. Если summary обновился — сохраняем в БД асинхронно
     if ctx_result.new_summary and req.session_id:
         await loop.run_in_executor(
