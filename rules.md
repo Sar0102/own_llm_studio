@@ -1,28 +1,25 @@
-### COMPONENT TABLE EXTRACTION RULES
+### Step 2.5: Unit Details Collection (Tool Execution)
 
-The component table is built by joining two fields from unit details:
+* **⚠️ MANDATORY TOOL CALL — do not skip.**
+* For EACH unit code collected in Step 2 — call GET UNIT DETAILS tool.
+* This step is required to build the Component Table in the final report.
 
-**Column: Код компонента**
-- Source field: where `type = "sber_component"`
-- Value: `value[].name` → use AS-IS (e.g. "SRGE")
+  #### Extract from response:
 
-**Column: Название компонента**
-- Source field: where `type = "version"`
-- Value: `value[].name` → extract ONLY words, strip version pattern
-- Strip rule: remove trailing token matching pattern \d+[\d.]+\d+
-- Example: "Platform V Frontend High Load 4.3.9.6" → "Platform V Frontend High Load"
-- Example: "Platform V Gateway Management 4.3.9.6-FH" → "Platform V Gateway Management"
+  **Код компонента** → field where type = "sber_component" → value[].name (as-is)
 
-**Column: Версия**
-- Source field: same `type = "version"` entry as above
-- Value: `value[].name` → extract ONLY version token matching pattern \d+[\d.]+\d+[\w-]*
-- Example: "Platform V Frontend High Load 4.3.9.6" → "4.3.9.6"
-- Example: "Platform V Gateway Management 4.3.9.6-FH" → "4.3.9.6-FH"
+  **Название компонента** → field where type = "version" → value[].name,
+  strip version suffix matching: \d+[\d.]+\d+[\w-]*
+  Example: "Platform V Gateway Management 4.3.9.6-FH" → "Platform V Gateway Management"
 
-**Row joining rule:**
-Each row = one entry from `type = "version"` value[],
-paired with the corresponding `type = "sber_component"` value[].name
-by matching ORDER or positional index.
+  **Версия** → same type = "version" entry → value[].name,
+  extract only token matching: \d+[\d.]+\d+[\w-]*
+  Example: "Platform V Gateway Management 4.3.9.6-FH" → "4.3.9.6-FH"
+
+  Each row = one value[] from type = "version",
+  paired with type = "sber_component" value[].name by ORDER index.
+
+* Store extracted rows — they will be used in OUTPUT TEMPLATE → Компонентный состав.
 ---
 
 
