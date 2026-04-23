@@ -9,12 +9,16 @@ Execute all steps below. Do not generate any text until Phase 2.
 **1. Identify release** — extract release number from user input.
 
 **2. Get task list** — call GET UNIT LIST for the release.
-   Save: unit codes, summary, description.content, type, source.
-
-**3. Get unit details** — for EACH unit code call GET UNIT DETAILS.
-   Save: 
-   - type="sber_component" → value[].name (component code)
-   - type="version" → value[].name (parse name + version)
+   Save: unit codes, summary, description.content, type, **3. Get unit details** — for EACH unit code call GET UNIT DETAILS.
+   Save:
+   - type="sber_component" → value[].name as-is (component code)
+   - type="version" → value[].name → split into two:
+     - Название: remove trailing token matching \d+[\d.]+\d+[\w-]*
+       Example: "Platform V Gateway Management 4.3.9.6-FH" → "Platform V Gateway Management"
+     - Версия: extract only token matching \d+[\d.]+\d+[\w-]*
+       Example: "Platform V Gateway Management 4.3.9.6-FH" → "4.3.9.6-FH"
+   - Each row = one value[] entry from type="version"
+     paired with type="sber_component" value[].name by ORDER index.
 
 **4. Get pull requests** — for EACH unit code call GET UNIT PULL REQUESTS.
    Save: PR descriptions, links, changes.
