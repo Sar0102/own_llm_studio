@@ -1,6 +1,6 @@
 ---
 name: release-notes-generator
-description: description: |
+description: |
   Генерация release notes (релизных заметок) для релиза в виде структурированного markdown-документа на русском языке.
   
   ОБЯЗАТЕЛЬНО используй этот скилл когда пользователь:
