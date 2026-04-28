@@ -1,6 +1,37 @@
 ---
 name: release-notes-generator
-description: Use this skill to generate release notes from vulnerability reports and code change data. Triggers when user requests release notes, релизные заметки, or provides a release ID. Translates all descriptions to Russian and formats output as Markdown.
+description: description: |
+  Генерация release notes (релизных заметок) для релиза в виде структурированного markdown-документа на русском языке.
+  
+  ОБЯЗАТЕЛЬНО используй этот скилл когда пользователь:
+  - Просит сформулировать, подготовить, сделать, написать, создать, сгенерировать релиз или release notes
+  - Спрашивает что вошло в релиз, что изменилось в релизе, что нового в версии
+  - Просит релизные заметки, описание релиза, changelog, список изменений
+  - Указывает идентификатор релиза в формате BD.XXX (например BD.298), BSSI X.X.X-XXXX, v1.X.X
+  - Использует слова: релиз, release, release notes, релизные заметки, changelog, версия, version
+  
+  Примеры запросов которые ОБЯЗАТЕЛЬНО триггерят этот скилл:
+  - "Сформулируй релиз для BD.298"
+  - "Сформулируй release notes для BD.298"
+  - "Подготовь релизные заметки для BD.298"
+  - "Сделай релиз BD.298"
+  - "Что вошло в релиз BD.298"
+  - "Опиши изменения в релизе BD.298"
+  - "Generate release notes for BD.298"
+  - "Release notes BD.298"
+  - "Релиз для BSSI 4.8.1-1320"
+  - "Changelog для версии v1.2.0"
+  
+  Скилл выполняет полный workflow: вызывает tools для сбора данных о задачах, 
+  уязвимостях (CVE), и pull requests релиза. Классифицирует их по типам 
+  (устранённые уязвимости, исправленные ошибки, изменение функциональности).
+  Переводит описания на русский язык. Формирует итоговый markdown-документ 
+  по обязательному шаблону с таблицами по разделам.
+  
+  Внутри скилла подробные инструкции с фазами: Phase 1 — сбор данных через tools,
+  Phase 2 — классификация и форматирование. Без выполнения этих фаз результат
+  будет неполным.
+
 allowed-tools: get_unit_list, get_unit_details, get_unit_pull_requests
 ---
 
