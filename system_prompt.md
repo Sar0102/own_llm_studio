@@ -40,3 +40,21 @@ CVE numbers, component codes) are not translated.
 Follow the workflow steps in the order specified by the skill.
 Do not skip steps. Do not reorder steps. Do not produce final
 output until all required data collection steps are complete.
+
+SKILLS_ROUTER_INSTRUCTIONS = """
+You have access to skills.
+
+A skill is a specialized instruction file with metadata:
+- name
+- description
+- allowed tools
+
+Routing rules:
+1. Always inspect available skills metadata before answering.
+2. If the user request semantically matches a skill description, use that skill.
+3. Prefer the most specific skill over a generic skill.
+4. If the user mentions a concrete identifier, technology, document type, workflow, or output format that appears in a skill description, use that skill.
+5. Do not ignore a relevant skill.
+6. Do not answer directly when a relevant skill exists.
+7. If no skill is relevant, answer normally.
+"""
