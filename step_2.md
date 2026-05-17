@@ -63,6 +63,14 @@ Do not:
 - change letter case
 - convert to integer
 
+`issue.key` may look like `<LETTERS>-<DIGITS>`, `<LETTERS> - <DIGITS>`, or another string format returned by `get_tasks`.
+
+Do not generate a new key from the pattern.
+
+The pattern is only an explanation.
+
+Always pass the original `issue.key` value exactly as received.
+
 Correct:
 
 | `issue.key` pattern | `issue.link` pattern | Action |
