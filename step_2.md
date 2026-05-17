@@ -65,18 +65,28 @@ Do not:
 
 Correct:
 
-| `issue.key` | `issue.link` | Action |
+| `issue.key` pattern | `issue.link` pattern | Action |
 |---|---|---|
-| `CRPV-47325` | `https://sberworks/...` | `get_tickets(["CRPV-47325"])` |
-| `STS-216122` | `https://portal.works.prod/...` | `get_unit_details(["STS-216122"])` |
-| `SBTSUPPORT - 20702` | `https://sberworks/...` | Ignore |
+| `<LETTERS>-<DIGITS>` | `https://sberworks/...` | `get_tickets(["<LETTERS>-<DIGITS>"])` |
+| `<LETTERS>-<DIGITS>` | `https://portal.works.prod/...` | `get_unit_details(["<LETTERS>-<DIGITS>"])` |
+| `<LETTERS>SUPPORT<LETTERS/SPACE/HYPHEN/DIGITS>` | any link | Ignore |
+
+Examples of valid original keys:
+
+| Original `issue.key` | Meaning |
+|---|---|
+| `CRPV-47325` | pass exactly as `CRPV-47325` |
+| `STS-216122` | pass exactly as `STS-216122` |
+| `TASK-123` | pass exactly as `TASK-123` |
+| `SBTSUPPORT - 20702` | ignore because it contains `SUPPORT` |
 
 Wrong:
 
 | Wrong input | Reason |
 |---|---|
 | `get_tickets([20702])` | Extracted number from SUPPORT issue |
-| `get_tickets(["47325"])` | Extracted number from `CRPV-47325` |
+| `get_tickets(["47325"])` | Extracted only digits from `<LETTERS>-<DIGITS>` |
+| `get_tickets(["<DIGITS>"])` | Must use full original key, not only digits |
 | `get_tickets(["SBTSUPPORT - 20702"])` | SUPPORT issue must be ignored |
 
 ## Result
