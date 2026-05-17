@@ -1,12 +1,10 @@
-**Step 2. Process bundle issues**
+*Step 2. Process bundle issues**
 
 Start this step only after Step 1 is fully completed.
 
-If the `get_tasks` response does not contain `bundle.issues`, skip this step and continue to the next step.
+If the `get_tasks` response does not contain `bundle.issues`, skip this step.
 
-If the `get_tasks` response contains `bundle.issues`, process each issue from `bundle.issues` independently.
-
-Each issue has this structure:
+For each issue in `bundle.issues`, use this structure:
 
 ```json
 {
@@ -16,13 +14,11 @@ Each issue has this structure:
 }
 ```
 
-Do not treat example values as real data.
+## Rules
 
-## Processing rules
+Apply rules in this exact order.
 
-For each issue in `bundle.issues`, apply the rules in this exact order.
-
-### Rule 1. Ignore SUPPORT issues
+### 1. Ignore SUPPORT
 
 If `issue.key` contains `SUPPORT`, ignore this issue completely.
 
@@ -30,91 +26,65 @@ Use case-insensitive matching.
 
 Do not call any tool for this issue.
 
-Do not include this issue in collected release data.
-
-Do not include this issue in the final release notes.
+Do not extract numbers from this issue.
 
 Examples:
 
 | `issue.key` | Action |
 |---|---|
-| `SUPPORT-123` | Ignore |
-| `ABC-SUPPORT-123` | Ignore |
+| `SBTSUPPORT - 20702` | Ignore |
+| `SBTSUPPORT - 29749` | Ignore |
 | `support - 3` | Ignore |
 
-### Rule 2. Select tool by issue link
+### 2. Select tool by link
 
-For every issue that was not ignored by Rule 1, select exactly one tool based on `issue.link`.
+For every non-SUPPORT issue, select the tool only by `issue.link`.
 
-| Condition | Tool to call |
+| `issue.link` condition | Tool |
 |---|---|
-| `issue.link` contains `portal.works.prod` | `get_unit_details` |
-| `issue.link` contains `sberworks` | `get_tickets` |
+| contains `portal.works.prod` | `get_unit_details` |
+| contains `sberworks` | `get_tickets` |
+| missing or unsupported | skip |
 
-If `issue.link` contains neither `portal.works.prod` nor `sberworks`, skip this issue.
+Do not select tools by `issue.key`, `issue.name`, or guessed source.
 
-Do not invent another tool.
+### 3. Pass original key
 
-Do not call more than one tool for the same issue.
+Call the selected tool with the original full `issue.key`.
 
-### Rule 3. Call the selected tool
-
-Call the selected tool for each issue individually.
-
-Use `issue.key` exactly as it was returned in `bundle.issues`.
-
-The `key` is an exact identifier, not a display label.
-
-Do not modify, normalize, trim, reformat, or transform `issue.key`.
+Do not modify `issue.key`.
 
 Do not:
 
+- extract numbers
+- remove prefixes
 - remove spaces
-- replace spaces around hyphens
 - normalize hyphens
 - change letter case
-- translate the key
-- apply regex cleanup
-- slugify the key
+- convert to integer
 
-Examples:
+Correct:
 
-| `issue.key` from `bundle.issues` | Must be sent to tool |
-|---|---|
-| `BD.298 - 1` | `BD.298 - 1` |
-| `TASK-123` | `TASK-123` |
-| `Task - 123` | `Task - 123` |
-| `support - 3` | ignored because it contains `SUPPORT` |
+| `issue.key` | `issue.link` | Action |
+|---|---|---|
+| `CRPV-47325` | `https://sberworks/...` | `get_tickets(["CRPV-47325"])` |
+| `STS-216122` | `https://portal.works.prod/...` | `get_unit_details(["STS-216122"])` |
+| `SBTSUPPORT - 20702` | `https://sberworks/...` | Ignore |
 
 Wrong:
 
-| `issue.key` from `bundle.issues` | Wrong tool argument |
+| Wrong input | Reason |
 |---|---|
-| `BD.298 - 1` | `BD.298-1` |
-| `TASK - 123` | `TASK-123` |
-| `support - 3` | `support-3` |
+| `get_tickets([20702])` | Extracted number from SUPPORT issue |
+| `get_tickets(["47325"])` | Extracted number from `CRPV-47325` |
+| `get_tickets(["SBTSUPPORT - 20702"])` | SUPPORT issue must be ignored |
 
-### Rule 4. Save collected issue data
+## Result
 
-Save the result of each successful tool call as `collected_issue_data`.
+After Step 2:
 
-Each collected item must preserve:
-
-- original `issue.key`
-- original `issue.name`
-- original `issue.link`
-- selected tool name
-- tool response
-
-Continue processing until all `bundle.issues` have been checked.
-
-## Result of Step 2
-
-After Step 2 is completed, the workflow must have:
-
-- ignored all issues whose `key` contains `SUPPORT`
-- called `get_unit_details` for each non-SUPPORT issue whose `link` contains `portal.works.prod`
-- called `get_tickets` for each non-SUPPORT issue whose `link` contains `sberworks`
-- skipped unsupported links
-- preserved all original issue keys exactly as received
-- saved all successful tool responses into `collected_issue_data`
+- all SUPPORT issues are ignored
+- each non-SUPPORT issue is routed by `link`
+- `sberworks` issues go to `get_tickets`
+- `portal.works.prod` issues go to `get_unit_details`
+- all tool arguments use original full `issue.key`
