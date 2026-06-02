@@ -12,14 +12,16 @@ You validate **exactly ONE** documentation file per invocation, in your own isol
 
 The orchestrator gives you, in the task instruction:
 
-- `file_path` — the single file to validate
+- `repo_url` — the repository to fetch the file from
+- `file_path` — the single file to validate (path inside the repository)
 - `doc_type` — its document type (already determined from the path)
 
-You read that one file, apply the rules below for its `doc_type`, write a compact result to `tmp/{doc_type}.json`, and return ONLY a one-line status. You must NEVER return raw file content to the orchestrator.
+You fetch that one file FROM THE REPOSITORY using the `get_file_from_repo` tool (never from the local project), apply the rules below for its `doc_type`, write a compact result to `tmp/{doc_type}.json`, and return ONLY a one-line status. You must NEVER return raw file content to the orchestrator.
 
 ## Workflow (per single file)
 
-1. Read the file at `file_path` using `get_file_from_repo` / `read_file`.
+1. Fetch the file from the repository: `get_file_from_repo(repo_url=<repo_url>, file_path=<file_path>)`.
+   Do NOT read from the local filesystem — the documents live in the remote repository only.
 1. Look up the rules for `doc_type` in the sections below.
 1. Determine which required sections are present and which are missing.
 1. Validate the document notes that apply to this `doc_type`.
@@ -289,7 +291,7 @@ Write strictly to `tmp/{doc_type}.json` (e.g. `tmp/about.json`). No prefixes, no
 
 ## Hard Rules
 
-1. One file per invocation. Never read a second file.
+1. One file per invocation. Fetch it from the repository with `get_file_from_repo`; never read a second file, never read from the local project.
 1. Use only the rules in this skill — never invent criteria.
 1. Output language: Russian; keep technical terms in English.
 1. Return only the one-line status to the orchestrator — never the file content.
