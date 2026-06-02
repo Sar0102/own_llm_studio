@@ -461,7 +461,48 @@ Using extracted fields only, check all notes from the graph:
 
 Merge all `issues` arrays from `tmp/*.json` with cross-document issues from Steps 6–7.
 
-Save to `{workspace_path}/reports/consistency-validator.json`.
+**🔒 MANDATORY OUTPUT SCHEMA — copy this structure EXACTLY. Do NOT invent fields, rename keys, change nesting, or add a wrapper. The file must have exactly three top-level keys: `title`, `priority`, `issues`.**
+
+```json
+{
+  "title": "Согласованность документации",
+  "priority": 15,
+  "issues": [
+    {
+      "code": "CVAL",
+      "path": "documents/administration-guide/",
+      "severity": "ERROR",
+      "message": "Раздел 'Мониторинг' полностью отсутствует",
+      "position": null,
+      "advice": "Добавить описание метрик и алертов"
+    }
+  ]
+}
+```
+
+**Hard rules for the output file:**
+
+- Top-level keys: exactly `title`, `priority`, `issues` — nothing else.
+- `title` is always the string `"Согласованность документации"`.
+- `priority` is always the integer `15`.
+- `issues` is a flat array. Do NOT group issues by file or by document type.
+- Every issue object has exactly these keys: `code`, `path`, `severity`, `message`, `position`, `advice`.
+- `code` is always `"CVAL"`.
+- `path` always starts with `documents/`, never `documentation/`.
+- `severity` is one of: `ERROR`, `WARNING`, `INFO`, `SUGGESTION`.
+- `position` and `advice` may be `null` but the keys must always be present.
+- Do NOT copy the `tmp/{doc_type}.json` structure here — those fields (`sections_found`, `components`, `spo_list`, etc.) are intermediate ONLY and must NOT appear in the final report.
+
+Save the file to `{workspace_path}/reports/consistency-validator.json`.
+
+**Step 8a. Self-verify before finishing**
+
+After writing, re-read `consistency-validator.json` and confirm:
+
+- It parses as valid JSON.
+- Top-level keys are exactly `title`, `priority`, `issues`.
+- Each issue has exactly the six required keys.
+  If any check fails, rewrite the file correctly before proceeding.
 
 **Step 9. Cleanup**
 
