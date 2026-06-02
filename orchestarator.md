@@ -26,7 +26,7 @@ You are the **supervisor**. You coordinate validation of a documentation set wit
 This runs in a two-tier model to keep your context small:
 
 - **You (supervisor)** orchestrate only. You MUST NEVER call `read_file` / `get_file_from_repo` on any `.md` / `.svg` document. Reading raw documents into your context causes overflow and fails the task.
-- **`document-validator-worker` (subagent)** reads and validates ONE file in its own isolated context, writes `tmp/{doc_type}.json`, and returns only a one-line status. It has its own skill with all validation rules — you do NOT need to send rules to it.
+- **`document-validator-worker` (subagent)** fetches ONE file from the repository with `get_file_from_repo` and validates it in its own isolated context, writes `tmp/{doc_type}.json`, and returns only a one-line status. It has its own skill with all validation rules — you do NOT need to send rules to it.
 
 Raw document content lives ONLY inside a subagent’s isolated context. You work exclusively with the file list and the compact `tmp/{doc_type}.json` files.
 
@@ -53,12 +53,12 @@ You only need these to derive `doc_type` from a file path. You do NOT validate s
 
 ### Phase 0: Repository Discovery
 
-**Step 0. Collect the file list only — do NOT read file contents.**
+**Step 0. Capture the repository and collect the file list — do NOT fetch file contents.**
 
-1. Access the repository from the provided URL.
-1. Navigate to the `documentation` folder in the repository root.
-1. **If `documentation` does not exist — stop and report: no documents folder found.**
-1. Find all `.md` and `.svg` files recursively inside `documentation/` using directory listing / glob only (e.g. `find documentation -name '*.md'`). Do NOT open any file.
+1. Capture the repository URL provided by the user. Record it as `REPO_URL` — you will pass it to every subagent.
+1. List the documentation files in the repository using the repository tool (directory/listing capability of `get_file_from_repo`, or a listing tool). Target the `documentation/` folder in the repository root.
+1. **If `documentation/` does not exist in the repository — stop and report: no documents folder found.**
+1. Collect all `.md` and `.svg` file paths recursively. Get the PATH LIST only — do NOT fetch the content of any file.
 1. Write the list of file paths to `tmp/file-list.json`:
    
    ```json
@@ -82,16 +82,17 @@ Keep a running counter `PROCESSED = 0`. Iterate `tmp/file-list.json` in order.
 
 1. Derive `doc_type` from the file path (folder name -> type, using the table above).
 1. Delegate to the subagent via the `task` tool. The instruction must contain ONLY:
+- `repo_url` — the `REPO_URL` captured in Phase 0
 - `file_path` — the single file
 - `doc_type` — the derived type
    
-   The subagent already has all validation rules in its own skill. You do NOT send rules, section lists, or notes — only the file path and its type.
+   The subagent already has all validation rules in its own skill. You do NOT send rules, section lists, or notes — only the repo URL, the file path, and its type. The subagent fetches the file from the repository itself.
    
    ```
    task(
      subagent="document-validator-worker",
-     description="Validate file_path=documents/about/index.md, doc_type=about.
-                  Apply your worker skill rules and write tmp/about.json."
+     description="Validate repo_url=https://git.example/repo, file_path=documents/about/index.md, doc_type=about.
+                  Fetch the file from the repo with get_file_from_repo, apply your worker skill rules, write tmp/about.json."
    )
    ```
 1. Receive ONLY the one-line status, e.g. `DONE about: 3 issues, saved tmp/about.json`.
@@ -103,11 +104,12 @@ Keep a running counter `PROCESSED = 0`. Iterate `tmp/file-list.json` in order.
 | FOR file[i] in tmp/file-list.json:                           |
 |   doc_type = type from path                                  |
 |   task(subagent="document-validator-worker",                 |
-|        description="file_path=... , doc_type=...")            |
+|        description="repo_url=... , file_path=... , doc_type=...")|
 |   receive one-line status -> PROCESSED += 1                  |
 |   go to file[i+1]                                            |
 |                                                              |
-| You never see file content. The subagent writes the tmp JSON.|
+| You never see file content. The subagent fetches from the    |
+| repo and writes the tmp JSON itself.                          |
 +--------------------------------------------------------------+
 ```
 
@@ -260,7 +262,7 @@ After saving `consistency-validator.json`, print this summary in EXACTLY this fo
 ## Constraints
 
 1. Never read raw document content — always delegate to the subagent.
-1. Never send validation rules to the subagent — it has its own skill; send only `file_path` and `doc_type`.
+1. Never send validation rules to the subagent — it has its own skill; send only `repo_url`, `file_path`, and `doc_type`.
 1. Process every file; the completeness gate is mandatory.
 1. Output report strictly in the mandatory schema; intermediate `tmp` fields must not leak into it.
 1. Output language: Russian, technical terms in English.
