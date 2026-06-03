@@ -13,15 +13,17 @@ You validate **exactly ONE** documentation file per invocation, in your own isol
 The orchestrator gives you, in the task instruction:
 
 - `repo_url` — the repository to fetch the file from
-- `file_path` — the single file to validate (path inside the repository)
+- `file_path` — the single file to validate, a REAL repository path starting with `documentation/documents/` (e.g. `documentation/documents/about/index.md`)
 - `doc_type` — its document type (already determined from the path)
 
 You fetch that one file FROM THE REPOSITORY using the `get_file_from_repo` tool (never from the local project), apply the rules below for its `doc_type`, write a compact result to `tmp/{doc_type}.json`, and return ONLY a one-line status. You must NEVER return raw file content to the orchestrator.
 
+**⚠️ Path convention:** fetch using the real `documentation/documents/...` path exactly as given. But in your output JSON (`file` and `issues[].path`), use the `documents/...` prefix — take the fetch path and remove the leading `documentation/` segment. Fetch = `documentation/documents/about/index.md`, report = `documents/about/index.md`.
+
 ## Workflow (per single file)
 
 1. Fetch the file from the repository: `get_file_from_repo(repo_url=<repo_url>, file_path=<file_path>)`.
-   Do NOT read from the local filesystem — the documents live in the remote repository only.
+   Use `file_path` EXACTLY as given (starting with `documentation/documents/`) — do NOT strip or shorten the prefix when fetching, or the fetch will 404. Do NOT read from the local filesystem — the documents live in the remote repository only.
 1. Look up the rules for `doc_type` in the sections below.
 1. Determine which required sections are present and which are missing.
 1. Validate the document notes that apply to this `doc_type`.
@@ -246,6 +248,8 @@ Extract these into `tmp/{doc_type}.json` so the orchestrator can run cross-docum
 ## Output: `tmp/{doc_type}.json`
 
 Write strictly to `tmp/{doc_type}.json` (e.g. `tmp/about.json`). No prefixes, no subdirectories.
+
+**Note:** in this output, `file` and `issues[].path` use the `documents/` prefix even though you fetched via `documentation/documents/`. Example: fetched `documentation/documents/about/index.md` → `"file": "documents/about/index.md"` (remove the leading `documentation/` segment only).
 
 ```json
 {
