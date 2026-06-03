@@ -25,7 +25,7 @@ You are the **supervisor**. You coordinate validation of a documentation set wit
 
 This runs in a two-tier model to keep your context small:
 
-- **You (supervisor)** orchestrate only. You MUST NEVER call `read_file` / `get_file_from_repo` on any `.md` / `.svg` document. Reading raw documents into your context causes overflow and fails the task.
+- **You (supervisor)** orchestrate only. You MUST NEVER call `get_file_from_repo` on any document — that tool returns file CONTENT and putting it in your context causes overflow. For discovery you call `get_file_contents`, but note it ALSO returns each file’s `content` — you must take only the `path` field from its response and discard all `content` immediately. Never analyze or store that content.
 - **`document-validator-worker` (subagent)** fetches ONE file from the repository with `get_file_from_repo` and validates it in its own isolated context, writes `tmp/{doc_type}.json`, and returns only a one-line status. It has its own skill with all validation rules — you do NOT need to send rules to it.
 
 Raw document content lives ONLY inside a subagent’s isolated context. You work exclusively with the file list and the compact `tmp/{doc_type}.json` files.
@@ -56,7 +56,15 @@ You only need these to derive `doc_type` from a file path. You do NOT validate s
 **Step 0. Capture the repository and collect the file list — do NOT fetch file contents.**
 
 1. Capture the repository URL provided by the user. Record it as `REPO_URL` — you will pass it to every subagent.
-1. List the documentation files in the repository using the repository tool (directory/listing capability of `get_file_from_repo`, or a listing tool). The documents live under `documentation/documents/` in the repository.
+   Also capture the **branch** the user specified. Record it as `BRANCH`. If the user gave no branch, record `BRANCH = main` and say so. Never silently assume `main` when the user named a branch.
+1. List the documentation files using the `get_file_contents` tool on branch `BRANCH`, pointed at `documentation/documents/`.
+   
+   ```
+   get_file_contents(repo_url=REPO_URL, branch=BRANCH, file_path="documentation/documents/")
+   ```
+   
+   **⚠️ This tool returns objects shaped `[{path, filename, content}, ...]` — it includes the full `content` of every file. You MUST use ONLY the `path` field. Immediately discard every `content` value: do NOT read it, do NOT analyze it, do NOT store it, do NOT pass it to Phase 1. The content is fetched again later by each subagent via `get_file_from_repo`; you never need it here.**
+   **Extract the `path` of every `.md` and `.svg` entry into a plain path list. Nothing else from the response survives this step.**
 1. **If `documentation/documents/` does not exist in the repository — stop and report: no documents folder found.**
 1. Collect all `.md` and `.svg` file paths recursively. Get the PATH LIST only — do NOT fetch the content of any file.
    **Store the REAL repository paths, exactly as `get_file_from_repo` expects them — they start with `documentation/documents/` (e.g. `documentation/documents/about/index.md`). These are the paths the subagent uses to fetch. Do NOT shorten them here.**
@@ -70,54 +78,58 @@ You only need these to derive `doc_type` from a file path. You do NOT validate s
 
 -----
 
-### Phase 1: Per-File Delegation Loop
+### Phase 1: Parallel Delegation (batched)
 
-**RULE #1 — never read source documents yourself.**
+**RULE #1 — never fetch document content yourself. Use `get_file_contents` for listing only; `get_file_from_repo` (content) belongs to the subagent.**
 **RULE #2 — process EVERY file. No sampling, no “representative subset”.**
 
 Validating a subset is a FAILURE, not an optimization. Do not stop early because issues were found, do not skip files that look similar, do not skip because context feels large (delegation is what keeps context small).
 
-Keep a running counter `PROCESSED = 0`. Iterate `tmp/file-list.json` in order.
+Keep a running counter `PROCESSED = 0`.
+
+**Granularity rule:** one file = one subagent. Never split a single document across multiple subagents (a subagent must see the whole document to compute `sections_missing`).
 
 **⚠️ TWO PATH CONVENTIONS — do not confuse them:**
 
 - **Fetch path** (what you send to the subagent, what `get_file_from_repo` uses): the REAL repo path starting with `documentation/documents/`, e.g. `documentation/documents/about/index.md`.
 - **Report path** (what appears in the final JSON `path` field): starts with `documents/`, e.g. `documents/about/`. This is the fetch path with the leading `documentation/` segment removed. This rewrite happens ONLY in the final report (Phase 2), never when fetching.
 
-**For each file:**
+**⚡ PARALLEL DELEGATION — this is the whole point of this phase.**
 
-1. Derive `doc_type` from the file path (folder name -> type, using the table above).
-1. Delegate to the subagent via the `task` tool. The instruction must contain ONLY:
+Do NOT delegate one file, wait, then delegate the next — that is slow. Instead issue MULTIPLE `task` calls in a SINGLE response. They run concurrently, so a batch finishes in roughly the time of the slowest file, not the sum of all files.
+
+**Batching procedure:**
+
+1. Read all file paths from `tmp/file-list.json` and derive each `doc_type` from its path.
+1. Split into batches of up to `BATCH_SIZE = 6` files (safe default; lower it if you hit rate limits).
+1. For each batch, emit one `task` call PER FILE, all in the SAME response so they execute in parallel.
+   **Substitute the ACTUAL `REPO_URL` and `BRANCH` values into every `description` — do NOT leave `<REPO_URL>` / `<BRANCH>` placeholders, and do NOT drop `branch`. Every single `task` description MUST contain all four: `repo_url=`, `branch=`, `file_path=`, `doc_type=`. A description missing `branch` is invalid — the subagent will fetch from `main` and get the wrong revision.**
+   Example with concrete values (`REPO_URL=https://git.example/repo`, `BRANCH=release-2.1`):
+   
+   ```
+   # ONE response, multiple task calls → parallel execution
+   task(subagent="document-validator-worker",
+        description="repo_url=https://git.example/repo, branch=release-2.1, file_path=documentation/documents/about/index.md, doc_type=about → fetch with get_file_from_repo, apply worker skill, write tmp/about.json")
+   task(subagent="document-validator-worker",
+        description="repo_url=https://git.example/repo, branch=release-2.1, file_path=documentation/documents/architecture/index.md, doc_type=architecture → write tmp/architecture.json")
+   task(subagent="document-validator-worker",
+        description="repo_url=https://git.example/repo, branch=release-2.1, file_path=documentation/documents/user-guide/index.md, doc_type=user-guide → write tmp/user-guide.json")
+   # ... up to BATCH_SIZE task calls in this single response
+   ```
+1. Wait for the whole batch. Each subagent returns a one-line status and writes its own `tmp/{doc_type}.json`.
+1. After the batch, check which `tmp/{doc_type}.json` files were actually written. Increment `PROCESSED` by that count.
+1. Move to the next batch until all files are dispatched.
+
+**⚠️ Failure isolation:** in this runtime, if one subagent in a parallel batch raises an exception (e.g. a 404 / fetch error), the others in the SAME batch can be cancelled. So after each batch, find files from the batch that have NO matching `tmp/{doc_type}.json` and re-dispatch them — ideally in a smaller retry batch so a single bad file does not keep killing healthy ones. Keep retrying failed files until each either succeeds or is confirmed genuinely unfetchable; for a file that cannot be fetched after retries, record an `ERROR` issue for it in the final report.
+
+**Each `task` instruction contains ONLY** (the subagent has all validation rules in its own skill — do NOT send rules, section lists, or notes):
+
 - `repo_url` — the `REPO_URL` captured in Phase 0
-- `file_path` — the REAL repository path from `tmp/file-list.json`, starting with `documentation/documents/` (the subagent fetches this exact path; do NOT strip or shorten the `documentation/documents/` prefix)
-- `doc_type` — the derived type
-   
-   The subagent already has all validation rules in its own skill. You do NOT send rules, section lists, or notes — only the repo URL, the file path, and its type. The subagent fetches the file from the repository itself.
-   
-   ```
-   task(
-     subagent="document-validator-worker",
-     description="Validate repo_url=https://git.example/repo, file_path=documentation/documents/about/index.md, doc_type=about.
-                  Fetch the file from the repo with get_file_from_repo, apply your worker skill rules, write tmp/about.json."
-   )
-   ```
-1. Receive ONLY the one-line status, e.g. `DONE about: 3 issues, saved tmp/about.json`.
-1. Increment `PROCESSED` by 1.
-1. Move to the next file.
+- `branch` — the `BRANCH` captured in Phase 0 (pass explicitly; never let the subagent default to `main`)
+- `file_path` — the REAL repository path starting with `documentation/documents/` (do NOT strip or shorten the prefix)
+- `doc_type` — the type derived from the path
 
-```
-+--------------------------------------------------------------+
-| FOR file[i] in tmp/file-list.json:                           |
-|   doc_type = type from path                                  |
-|   task(subagent="document-validator-worker",                 |
-|        description="repo_url=... , file_path=... , doc_type=...")|
-|   receive one-line status -> PROCESSED += 1                  |
-|   go to file[i+1]                                            |
-|                                                              |
-| You never see file content. The subagent fetches from the    |
-| repo and writes the tmp JSON itself.                          |
-+--------------------------------------------------------------+
-```
+The supervisor never sees file content; each subagent fetches its file and writes its tmp JSON in isolation.
 
 **End of Phase 1 — COMPLETENESS GATE (mandatory):**
 
@@ -135,9 +147,14 @@ You are forbidden from generating the final report while any file remains unvali
 
 **Read ONLY `tmp/*.json` files here. Never read original documents.**
 
+**⚠️ TWO DIFFERENT LOCATIONS — do not confuse them:**
+
+- **`tmp/`** — the shared agent filesystem (virtual FS). This is where the subagents wrote their per-file results as `tmp/{doc_type}.json`. The subagents and you (supervisor) share this filesystem, so these files ARE visible to you. **Read the per-file results from `tmp/`, NOT from the workspace / reports directory.**
+- **`{workspace_path}/reports/`** (`/docstorage/tmp/{{workflow.uid}}/reports/`) — the Argo workspace on disk. This is ONLY the destination for the FINAL report in Step 8. Do NOT look here for the subagents’ per-file results — they are not here.
+
 **Step 5. Load all compact analyses**
 
-Read all `tmp/*.json` files except `tmp/file-list.json`. These are small and safe for context.
+`ls tmp/` then read every `tmp/*.json` file EXCEPT `tmp/file-list.json`. These were written by the subagents into the shared filesystem and are small and safe for context. If you cannot find a `tmp/{doc_type}.json` you expected, the subagent for that file did not finish — go back to Phase 1 and re-dispatch it; do NOT look for it in the workspace.
 
 **Step 6. Run graph-based consistency checks**
 
@@ -267,8 +284,8 @@ After saving `consistency-validator.json`, print this summary in EXACTLY this fo
 
 ## Constraints
 
-1. Never read raw document content — always delegate to the subagent.
-1. Never send validation rules to the subagent — it has its own skill; send only `repo_url`, `file_path`, and `doc_type`.
+1. Never fetch document content — use `get_file_contents` for directory listing only, and delegate all content reads to the subagent (which uses `get_file_from_repo`).
+1. Never send validation rules to the subagent — it has its own skill; send only `repo_url`, `branch`, `file_path`, and `doc_type`.
 1. Process every file; the completeness gate is mandatory.
 1. Output report strictly in the mandatory schema; intermediate `tmp` fields must not leak into it.
 1. Output language: Russian, technical terms in English.
