@@ -56,13 +56,14 @@ You only need these to derive `doc_type` from a file path. You do NOT validate s
 **Step 0. Capture the repository and collect the file list — do NOT fetch file contents.**
 
 1. Capture the repository URL provided by the user. Record it as `REPO_URL` — you will pass it to every subagent.
-1. List the documentation files in the repository using the repository tool (directory/listing capability of `get_file_from_repo`, or a listing tool). Target the `documentation/` folder in the repository root.
-1. **If `documentation/` does not exist in the repository — stop and report: no documents folder found.**
+1. List the documentation files in the repository using the repository tool (directory/listing capability of `get_file_from_repo`, or a listing tool). The documents live under `documentation/documents/` in the repository.
+1. **If `documentation/documents/` does not exist in the repository — stop and report: no documents folder found.**
 1. Collect all `.md` and `.svg` file paths recursively. Get the PATH LIST only — do NOT fetch the content of any file.
-1. Write the list of file paths to `tmp/file-list.json`:
+   **Store the REAL repository paths, exactly as `get_file_from_repo` expects them — they start with `documentation/documents/` (e.g. `documentation/documents/about/index.md`). These are the paths the subagent uses to fetch. Do NOT shorten them here.**
+1. Write the list of real file paths to `tmp/file-list.json`:
    
    ```json
-   ["documents/about/index.md", "documents/architecture/index.md", "..."]
+   ["documentation/documents/about/index.md", "documentation/documents/architecture/index.md", "..."]
    ```
 1. **Count the files. Record `TOTAL_FILES = <count>`.** You must delegate exactly this many.
 1. Proceed to Phase 1.
@@ -78,12 +79,17 @@ Validating a subset is a FAILURE, not an optimization. Do not stop early because
 
 Keep a running counter `PROCESSED = 0`. Iterate `tmp/file-list.json` in order.
 
+**⚠️ TWO PATH CONVENTIONS — do not confuse them:**
+
+- **Fetch path** (what you send to the subagent, what `get_file_from_repo` uses): the REAL repo path starting with `documentation/documents/`, e.g. `documentation/documents/about/index.md`.
+- **Report path** (what appears in the final JSON `path` field): starts with `documents/`, e.g. `documents/about/`. This is the fetch path with the leading `documentation/` segment removed. This rewrite happens ONLY in the final report (Phase 2), never when fetching.
+
 **For each file:**
 
 1. Derive `doc_type` from the file path (folder name -> type, using the table above).
 1. Delegate to the subagent via the `task` tool. The instruction must contain ONLY:
 - `repo_url` — the `REPO_URL` captured in Phase 0
-- `file_path` — the single file
+- `file_path` — the REAL repository path from `tmp/file-list.json`, starting with `documentation/documents/` (the subagent fetches this exact path; do NOT strip or shorten the `documentation/documents/` prefix)
 - `doc_type` — the derived type
    
    The subagent already has all validation rules in its own skill. You do NOT send rules, section lists, or notes — only the repo URL, the file path, and its type. The subagent fetches the file from the repository itself.
@@ -91,7 +97,7 @@ Keep a running counter `PROCESSED = 0`. Iterate `tmp/file-list.json` in order.
    ```
    task(
      subagent="document-validator-worker",
-     description="Validate repo_url=https://git.example/repo, file_path=documents/about/index.md, doc_type=about.
+     description="Validate repo_url=https://git.example/repo, file_path=documentation/documents/about/index.md, doc_type=about.
                   Fetch the file from the repo with get_file_from_repo, apply your worker skill rules, write tmp/about.json."
    )
    ```
