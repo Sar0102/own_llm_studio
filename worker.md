@@ -13,6 +13,7 @@ You validate **exactly ONE** documentation file per invocation, in your own isol
 The orchestrator gives you, in the task instruction:
 
 - `repo_url` — the repository to fetch the file from
+- `branch` — the branch to fetch from (use this exact branch; never default to `main`)
 - `file_path` — the single file to validate, a REAL repository path starting with `documentation/documents/` (e.g. `documentation/documents/about/index.md`)
 - `doc_type` — its document type (already determined from the path)
 
@@ -20,16 +21,18 @@ You fetch that one file FROM THE REPOSITORY using the `get_file_from_repo` tool 
 
 **⚠️ Path convention:** fetch using the real `documentation/documents/...` path exactly as given. But in your output JSON (`file` and `issues[].path`), use the `documents/...` prefix — take the fetch path and remove the leading `documentation/` segment. Fetch = `documentation/documents/about/index.md`, report = `documents/about/index.md`.
 
+**⚠️ Branch:** always pass the `branch` you received to `get_file_from_repo`. If you omit it, the tool defaults to `main` and fetches the wrong revision. If the instruction you received does NOT contain a `branch` value, do NOT guess `main` — return an error status `ERROR {doc_type}: missing branch in instruction` instead of fetching, so the orchestrator can re-dispatch with the branch.
+
 ## Workflow (per single file)
 
-1. Fetch the file from the repository: `get_file_from_repo(repo_url=<repo_url>, file_path=<file_path>)`.
-   Use `file_path` EXACTLY as given (starting with `documentation/documents/`) — do NOT strip or shorten the prefix when fetching, or the fetch will 404. Do NOT read from the local filesystem — the documents live in the remote repository only.
+1. Fetch the file from the repository: `get_file_from_repo(repo_url=<repo_url>, branch=<branch>, file_path=<file_path>)`.
+   Pass `branch` explicitly — omitting it makes the tool default to `main` and fetch the wrong revision. Use `file_path` EXACTLY as given (starting with `documentation/documents/`) — do NOT strip or shorten the prefix when fetching, or the fetch will 404. Do NOT read from the local filesystem — the documents live in the remote repository only.
 1. Look up the rules for `doc_type` in the sections below.
 1. Determine which required sections are present and which are missing.
 1. Validate the document notes that apply to this `doc_type`.
 1. Extract the fields: `sections_found`, `sections_missing`, `components`, `spo_list`, `key_terms`, `version`, `cross_refs`.
 1. Collect per-file issues (missing sections, broken references, note violations).
-1. Write `tmp/{doc_type}.json` (schema at the bottom) — strictly inside `tmp/`, no prefixes, no subdirectories.
+1. Write `tmp/{doc_type}.json` (schema at the bottom) using `write_file` — strictly the relative path `tmp/{doc_type}.json`, no prefixes, no subdirectories. Write to `tmp/`, NOT to any workspace or reports directory — the orchestrator reads your result from the shared `tmp/` filesystem.
 1. Return ONLY: `DONE {doc_type}: {n} issues, saved tmp/{doc_type}.json`.
 
 **Do NOT** invent validation criteria. Use only the rules defined in this skill. If a rule does not apply to this `doc_type`, skip it — do not fabricate findings.
@@ -247,7 +250,7 @@ Extract these into `tmp/{doc_type}.json` so the orchestrator can run cross-docum
 
 ## Output: `tmp/{doc_type}.json`
 
-Write strictly to `tmp/{doc_type}.json` (e.g. `tmp/about.json`). No prefixes, no subdirectories.
+Write strictly to the relative path `tmp/{doc_type}.json` (e.g. `tmp/about.json`) using `write_file`. No prefixes, no subdirectories, no workspace path. This lands in the shared agent filesystem where the orchestrator reads it — do NOT write it into `{workspace_path}` or any `reports/` directory.
 
 **Note:** in this output, `file` and `issues[].path` use the `documents/` prefix even though you fetched via `documentation/documents/`. Example: fetched `documentation/documents/about/index.md` → `"file": "documents/about/index.md"` (remove the leading `documentation/` segment only).
 
