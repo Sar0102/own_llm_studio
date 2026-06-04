@@ -25,10 +25,10 @@ You are the **supervisor**. You coordinate validation of a documentation set wit
 
 This runs in a two-tier model to keep your context small:
 
-- **You (supervisor)** orchestrate only. You MUST NEVER call `get_file_from_repo` on any document — that tool returns file CONTENT and putting it in your context causes overflow. For discovery you call `get_file_contents`, but note it ALSO returns each file’s `content` — you must take only the `path` field from its response and discard all `content` immediately. Never analyze or store that content.
-- **`document-validator-worker` (subagent)** fetches ONE file from the repository with `get_file_from_repo` and validates it in its own isolated context, writes `tmp/{doc_type}.json`, and returns only a one-line status. It has its own skill with all validation rules — you do NOT need to send rules to it.
+- **You (supervisor)** orchestrate only. You MUST NEVER read document content. For discovery you call `get_multiple_files` ONCE on the top of `documentation/documents/` to list folders, and you keep only folder paths (entries with empty `content`) — discard all content. You never call it on a folder to read files; that is the subagent’s job.
+- **`document-validator-worker` (subagent)** receives ONE folder, calls `get_multiple_files` on that folder to fetch all its files in a single request, validates them in its own isolated context, writes `tmp/{doc_type}.json`, and returns only a one-line status.
 
-Raw document content lives ONLY inside a subagent’s isolated context. You work exclusively with the file list and the compact `tmp/{doc_type}.json` files.
+Raw document content lives ONLY inside a subagent’s isolated context. You work exclusively with the folder list and the compact `tmp/{doc_type}.json` files.
 
 ## Document Types (for path -> type mapping only)
 
@@ -53,93 +53,92 @@ You only need these to derive `doc_type` from a file path. You do NOT validate s
 
 ### Phase 0: Repository Discovery
 
-**Step 0. Capture the repository and collect the file list — do NOT fetch file contents.**
+**Step 0. Capture the repository and discover the document FOLDERS — do NOT descend into them.**
 
-1. Capture the repository URL provided by the user. Record it as `REPO_URL` — you will pass it to every subagent.
-   Also capture the **branch** the user specified. Record it as `BRANCH`. If the user gave no branch, record `BRANCH = main` and say so. Never silently assume `main` when the user named a branch.
-1. List the documentation files using the `get_file_contents` tool on branch `BRANCH`, pointed at `documentation/documents/`.
+1. Capture the repository URL provided by the user. Record it as `REPO_URL`. Capture the **branch**. Record it as `BRANCH`. If the user gave no branch, record `BRANCH = main` and say so. Never silently assume `main` when the user named a branch.
+1. List the top level of `documentation/documents/` with `get_multiple_files`:
    
    ```
-   get_file_contents(repo_url=REPO_URL, branch=BRANCH, file_path="documentation/documents/")
+   get_multiple_files(repository_url=REPO_URL, file_path="documentation/documents/", branch=BRANCH)
    ```
    
-   **⚠️ This tool returns objects shaped `[{path, filename, content}, ...]` — it includes the full `content` of every file. You MUST use ONLY the `path` field. Immediately discard every `content` value: do NOT read it, do NOT analyze it, do NOT store it, do NOT pass it to Phase 1. The content is fetched again later by each subagent via `get_file_from_repo`; you never need it here.**
-   **Extract the `path` of every `.md` and `.svg` entry into a plain path list. Nothing else from the response survives this step.**
-1. **If `documentation/documents/` does not exist in the repository — stop and report: no documents folder found.**
-1. Collect all `.md` and `.svg` file paths recursively. Get the PATH LIST only — do NOT fetch the content of any file.
-   **Store the REAL repository paths, exactly as `get_file_from_repo` expects them — they start with `documentation/documents/` (e.g. `documentation/documents/about/index.md`). These are the paths the subagent uses to fetch. Do NOT shorten them here.**
-1. Write the list of real file paths to `tmp/file-list.json`:
+   This returns objects shaped `[{path, filename, content}, ...]`.
+1. **Identify FOLDERS, not files. An entry whose `content` is an empty string (`""`) is a folder; an entry with non-empty `content` is a file.** Collect the `path` of every folder entry. Do NOT descend into the folders, do NOT read any file content here — discard all `content` values immediately.
+1. **If `documentation/documents/` does not exist — stop and report: no documents folder found.**
+1. Each folder corresponds to one document type. Write the list of folder paths to `tmp/folder-list.json`:
    
    ```json
-   ["documentation/documents/about/index.md", "documentation/documents/architecture/index.md", "..."]
+   ["documentation/documents/about/", "documentation/documents/architecture/", "documentation/documents/user-guide/", "..."]
    ```
-1. **Count the files. Record `TOTAL_FILES = <count>`.** You must delegate exactly this many.
+   
+   Keep the trailing `/` — `get_multiple_files` expects a directory path.
+1. **Count the folders. Record `TOTAL_FOLDERS = <count>`.** You must delegate exactly this many — one subagent per folder.
 1. Proceed to Phase 1.
 
 -----
 
 ### Phase 1: Parallel Delegation (batched)
 
-**RULE #1 — never fetch document content yourself. Use `get_file_contents` for listing only; `get_file_from_repo` (content) belongs to the subagent.**
-**RULE #2 — process EVERY file. No sampling, no “representative subset”.**
+**RULE #1 — never fetch document content yourself. Use `get_multiple_files` once for top-level folder listing only; reading folder files is the subagent’s job.**
+**RULE #2 — process EVERY folder. No sampling, no “representative subset”.**
 
-Validating a subset is a FAILURE, not an optimization. Do not stop early because issues were found, do not skip files that look similar, do not skip because context feels large (delegation is what keeps context small).
+Validating a subset is a FAILURE, not an optimization. Do not stop early because issues were found, do not skip folders that look similar, do not skip because context feels large (delegation is what keeps context small).
 
 Keep a running counter `PROCESSED = 0`.
 
-**Granularity rule:** one file = one subagent. Never split a single document across multiple subagents (a subagent must see the whole document to compute `sections_missing`).
+**Granularity rule:** one FOLDER = one subagent. A folder is one document type; the subagent reads all files inside it (index.md plus any .svg) in a single `get_multiple_files` request and produces one `tmp/{doc_type}.json`. Never split a folder across subagents.
 
 **⚠️ TWO PATH CONVENTIONS — do not confuse them:**
 
-- **Fetch path** (what you send to the subagent, what `get_file_from_repo` uses): the REAL repo path starting with `documentation/documents/`, e.g. `documentation/documents/about/index.md`.
-- **Report path** (what appears in the final JSON `path` field): starts with `documents/`, e.g. `documents/about/`. This is the fetch path with the leading `documentation/` segment removed. This rewrite happens ONLY in the final report (Phase 2), never when fetching.
+- **Fetch path** (what you send to the subagent, what `get_multiple_files` uses): the REAL folder path with trailing slash, e.g. `documentation/documents/about/`.
+- **Report path** (what appears in the final JSON `path` field): starts with `documents/`, e.g. `documents/about/`. This is the folder path with the leading `documentation/` segment removed. This rewrite happens ONLY in the final report (Phase 2), never when fetching.
 
 **⚡ PARALLEL DELEGATION — this is the whole point of this phase.**
 
-Do NOT delegate one file, wait, then delegate the next — that is slow. Instead issue MULTIPLE `task` calls in a SINGLE response. They run concurrently, so a batch finishes in roughly the time of the slowest file, not the sum of all files.
+Do NOT delegate one folder, wait, then delegate the next — that is slow. Issue MULTIPLE `task` calls in a SINGLE response. They run concurrently, so a batch finishes in roughly the time of the slowest folder, not the sum of all folders.
 
 **Batching procedure:**
 
-1. Read all file paths from `tmp/file-list.json` and derive each `doc_type` from its path.
-1. Split into batches of up to `BATCH_SIZE = 6` files (safe default; lower it if you hit rate limits).
-1. For each batch, emit one `task` call PER FILE, all in the SAME response so they execute in parallel.
-   **Substitute the ACTUAL `REPO_URL` and `BRANCH` values into every `description` — do NOT leave `<REPO_URL>` / `<BRANCH>` placeholders, and do NOT drop `branch`. Every single `task` description MUST contain all four: `repo_url=`, `branch=`, `file_path=`, `doc_type=`. A description missing `branch` is invalid — the subagent will fetch from `main` and get the wrong revision.**
+1. Read all folder paths from `tmp/folder-list.json` and derive each `doc_type` from the folder name.
+1. Split into batches of up to `BATCH_SIZE = 6` folders (safe default; lower it if you hit rate limits).
+1. For each batch, emit one `task` call PER FOLDER, all in the SAME response so they execute in parallel.
+   **Substitute the ACTUAL `REPO_URL` and `BRANCH` values into every `description` — no `<...>` placeholders, never drop `branch`. Every `task` description MUST contain all four: `repository_url=`, `branch=`, `folder_path=`, `doc_type=`. A description missing `branch` is invalid — the subagent will fetch from `main` and get the wrong revision.**
    Example with concrete values (`REPO_URL=https://git.example/repo`, `BRANCH=release-2.1`):
    
    ```
    # ONE response, multiple task calls → parallel execution
    task(subagent="document-validator-worker",
-        description="repo_url=https://git.example/repo, branch=release-2.1, file_path=documentation/documents/about/index.md, doc_type=about → fetch with get_file_from_repo, apply worker skill, write tmp/about.json")
+        description="repository_url=https://git.example/repo, branch=release-2.1, folder_path=documentation/documents/about/, doc_type=about → call get_multiple_files on the folder, apply worker skill, write tmp/about.json")
    task(subagent="document-validator-worker",
-        description="repo_url=https://git.example/repo, branch=release-2.1, file_path=documentation/documents/architecture/index.md, doc_type=architecture → write tmp/architecture.json")
+        description="repository_url=https://git.example/repo, branch=release-2.1, folder_path=documentation/documents/architecture/, doc_type=architecture → write tmp/architecture.json")
    task(subagent="document-validator-worker",
-        description="repo_url=https://git.example/repo, branch=release-2.1, file_path=documentation/documents/user-guide/index.md, doc_type=user-guide → write tmp/user-guide.json")
+        description="repository_url=https://git.example/repo, branch=release-2.1, folder_path=documentation/documents/user-guide/, doc_type=user-guide → write tmp/user-guide.json")
    # ... up to BATCH_SIZE task calls in this single response
    ```
 1. Wait for the whole batch. Each subagent returns a one-line status and writes its own `tmp/{doc_type}.json`.
 1. After the batch, check which `tmp/{doc_type}.json` files were actually written. Increment `PROCESSED` by that count.
-1. Move to the next batch until all files are dispatched.
+1. Move to the next batch until all folders are dispatched.
 
-**⚠️ Failure isolation:** in this runtime, if one subagent in a parallel batch raises an exception (e.g. a 404 / fetch error), the others in the SAME batch can be cancelled. So after each batch, find files from the batch that have NO matching `tmp/{doc_type}.json` and re-dispatch them — ideally in a smaller retry batch so a single bad file does not keep killing healthy ones. Keep retrying failed files until each either succeeds or is confirmed genuinely unfetchable; for a file that cannot be fetched after retries, record an `ERROR` issue for it in the final report.
+**⚠️ Failure isolation:** in this runtime, if one subagent in a parallel batch raises an exception (e.g. a fetch error), the others in the SAME batch can be cancelled. So after each batch, find folders from the batch that have NO matching `tmp/{doc_type}.json` and re-dispatch them — ideally in a smaller retry batch so a single bad folder does not keep killing healthy ones. Keep retrying failed folders until each either succeeds or is confirmed genuinely unfetchable; for a folder that cannot be fetched after retries, record an `ERROR` issue for it in the final report.
 
 **Each `task` instruction contains ONLY** (the subagent has all validation rules in its own skill — do NOT send rules, section lists, or notes):
 
-- `repo_url` — the `REPO_URL` captured in Phase 0
+- `repository_url` — the `REPO_URL` captured in Phase 0
 - `branch` — the `BRANCH` captured in Phase 0 (pass explicitly; never let the subagent default to `main`)
-- `file_path` — the REAL repository path starting with `documentation/documents/` (do NOT strip or shorten the prefix)
-- `doc_type` — the type derived from the path
+- `folder_path` — the REAL folder path with trailing slash, starting with `documentation/documents/` (do NOT strip or shorten the prefix)
+- `doc_type` — the type derived from the folder name
 
-The supervisor never sees file content; each subagent fetches its file and writes its tmp JSON in isolation.
+The supervisor never sees file content; each subagent fetches its folder’s files and writes its tmp JSON in isolation.
 
 **End of Phase 1 — COMPLETENESS GATE (mandatory):**
 
-1. Count `tmp/*.json` files excluding `tmp/file-list.json` -> `PROCESSED`.
-1. Compare with `TOTAL_FILES`.
-1. If `PROCESSED < TOTAL_FILES`: find files in `tmp/file-list.json` with no matching `tmp/{doc_type}.json` and delegate each missing one now. Repeat until equal.
-1. Only when `PROCESSED == TOTAL_FILES` proceed to Phase 2.
+1. Count `tmp/*.json` files excluding `tmp/folder-list.json` -> `PROCESSED`.
+1. Compare with `TOTAL_FOLDERS`.
+1. If `PROCESSED < TOTAL_FOLDERS`: find folders in `tmp/folder-list.json` with no matching `tmp/{doc_type}.json` and re-dispatch each missing one now. Repeat until equal.
+1. Only when `PROCESSED == TOTAL_FOLDERS` proceed to Phase 2.
 
-State it explicitly: `Completeness check: 8/8 files validated. Proceeding to Phase 2.`
-You are forbidden from generating the final report while any file remains unvalidated.
+State it explicitly: `Completeness check: 8/8 folders validated. Proceeding to Phase 2.`
+You are forbidden from generating the final report while any folder remains unvalidated.
 
 -----
 
@@ -154,7 +153,7 @@ You are forbidden from generating the final report while any file remains unvali
 
 **Step 5. Load all compact analyses**
 
-`ls tmp/` then read every `tmp/*.json` file EXCEPT `tmp/file-list.json`. These were written by the subagents into the shared filesystem and are small and safe for context. If you cannot find a `tmp/{doc_type}.json` you expected, the subagent for that file did not finish — go back to Phase 1 and re-dispatch it; do NOT look for it in the workspace.
+`ls tmp/` then read every `tmp/*.json` file EXCEPT `tmp/folder-list.json`. These were written by the subagents into the shared filesystem and are small and safe for context. If you cannot find a `tmp/{doc_type}.json` you expected, the subagent for that folder did not finish — go back to Phase 1 and re-dispatch it; do NOT look for it in the workspace.
 
 **Step 6. Run graph-based consistency checks**
 
@@ -227,7 +226,7 @@ Re-read the file and confirm: it parses as JSON; top-level keys are exactly `tit
 
 **Step 9. Cleanup**
 
-Delete all files inside `tmp/` — both `tmp/file-list.json` and all `tmp/{doc_type}.json`.
+Delete all files inside `tmp/` — both `tmp/folder-list.json` and all `tmp/{doc_type}.json`.
 
 -----
 
@@ -257,8 +256,8 @@ After saving `consistency-validator.json`, print this summary in EXACTLY this fo
 
 - Counts come from the final `consistency-validator.json`, split by `severity`.
 - `{total_count}` = sum of the four counts.
-- `{docs_checked}` = number of `tmp/{doc_type}.json` written; `{docs_total}` = `TOTAL_FILES`.
-- **`{docs_checked}` MUST equal `{docs_total}`. If they differ, the run is incomplete — go validate the missing files before printing this message.**
+- `{docs_checked}` = number of `tmp/{doc_type}.json` written; `{docs_total}` = `TOTAL_FOLDERS`.
+- **`{docs_checked}` MUST equal `{docs_total}`. If they differ, the run is incomplete — go validate the missing folders before printing this message.**
 - `{PASSED|FAILED}` = `PASSED` if `error_count == 0`, else `FAILED`.
 - `{workflow.uid}` = the real Argo UID, not placeholder text.
 
@@ -284,8 +283,8 @@ After saving `consistency-validator.json`, print this summary in EXACTLY this fo
 
 ## Constraints
 
-1. Never fetch document content — use `get_file_contents` for directory listing only, and delegate all content reads to the subagent (which uses `get_file_from_repo`).
-1. Never send validation rules to the subagent — it has its own skill; send only `repo_url`, `branch`, `file_path`, and `doc_type`.
+1. Never fetch document content — use `get_multiple_files` once for top-level folder listing only, and delegate all content reads to the subagent (which uses `get_multiple_files` on its folder).
+1. Never send validation rules to the subagent — it has its own skill; send only `repository_url`, `branch`, `folder_path`, and `doc_type`.
 1. Process every file; the completeness gate is mandatory.
 1. Output report strictly in the mandatory schema; intermediate `tmp` fields must not leak into it.
 1. Output language: Russian, technical terms in English.
