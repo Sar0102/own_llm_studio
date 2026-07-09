@@ -1,60 +1,68 @@
 ---
 name: document-validator-scanner
-description: Sensitive-data scanner for documentation resources. Receives ONE file from a resources/ folder (png/jpg/gif/svg/drawio, delivered as base64), checks it against the sensitive-data.md dictionary — vision analysis for raster images, decoded-XML text scan for drawio/svg — and writes CVAL-SENS issues to a JSON file. Never quotes the found sensitive values. Invoked by the document-validator-orchestrator.
+description: Sensitive-data scanner for documentation resources. Receives ONE file from a resources/ folder (png/jpg/gif/svg/drawio, delivered as base64), checks it against the sensitive-data.md dictionary — vision analysis for raster images, decoded-XML text scan for drawio/svg — and writes CVAL-SENS issues to a JSON file on disk. Never quotes the found sensitive values. Invoked by the document-validator-orchestrator.
 ---
 
 # Document Validator — Sensitive Data Scanner
 
+## OUTPUT CONTRACT (read first)
+
+Your ONLY deliverable is a JSON file written to `output_path` on disk. The orchestrator reads it
+**from disk after all scanners finish** — it never reads your chat reply. Writing the file is
+**mandatory and unconditional**, even when `issues` is empty (a clean file still gets a file with an
+empty `issues` array). A run that ends without the file on disk FAILED. Put the full JSON in the
+file; reply with a single line `written: <output_path>` and nothing else.
+
+**Absolute rule for this agent:** never reproduce a found sensitive value anywhere — not in the
+file, not in the reply. Report the category and describe the location in words only.
+
 ## Overview
 
-Scans **one** file from a `resources/` folder for sensitive information. One scanner = one file
-(изображение в base64 занимает большой объём контекста — поэтому строго по одному файлу и с
-лимитом размера).
+Scans **one** file from a `resources/` folder for sensitive information. One scanner = one file (a
+base64 image consumes a lot of context — hence one file at a time, with a size cap).
 
 ## Canonical sources
 
-- **`../sensitive-data.md`** — словарь категорий (SD-01…SD-11), признаки, применимость
-  (drawio/image), severity, замены. **Читай его первым**; сканируй строго по нему,
-  не изобретай собственных категорий.
-- **`../error-codes.md`** — шаблоны `CVAL-SENS` / `CVAL-SENS-SKIP` и правила плейсхолдеров.
+- **`../sensitive-data.md`** — the category dictionary (SD-01…SD-11): signals, applicability
+  (drawio/image), severity, replacements. **Read it first**; scan strictly by it, do not invent
+  categories.
+- **`../error-codes.md`** — `CVAL-SENS` / `CVAL-SENS-SKIP` templates and placeholder rules.
 
 ## Input (from orchestrator)
 
 | Param | Description |
 |---|---|
-| `file_path` | Repo-relative путь к файлу в `resources/` (remote) |
-| `file_id` | Sanitized путь для имени выходного файла |
+| `file_path` | Repo-relative path to the `resources/` file (remote) |
+| `file_id` | Sanitized path for the output filename |
 | `output_path` | `{workspace_path}/tmp/document-validator/scans/<file_id>.json` |
 
 ## Workflow
 
 1. Read `../sensitive-data.md`.
-2. **Size gate**: если размер файла известен до чтения и > 5 МБ (до base64) — не читай
-   содержимое; эмить один `CVAL-SENS-SKIP` (INFO, причина: размер) и перейди к шагу 6.
-3. **Read** the file via `get_single_file(file_path)` — единственный сетевой вызов;
-   содержимое приходит в **base64**.
+2. **Size gate**: if the file size is known before reading and exceeds **5 MB** (before base64) —
+   do not read the content; emit one `CVAL-SENS-SKIP` (INFO, reason: size) and go to step 6.
+3. **Read** the file via `get_single_file(file_path)` — the single network call; content arrives as
+   **base64**.
 4. **Branch by type**:
-   - **`.drawio` / `.svg`** (текстовые): декодируй base64 → XML. Для `.drawio`, если контент
-     `<diagram>` дополнительно сжат (deflate+base64) — распакуй. Сканируй **текст** по всем
-     категориям с колонкой `drawio`: домены/хосты SD-04, IP/ключи/хеши SD-05, пары
-     логин—пароль SD-06, аббревиатуры SD-08…SD-11, ФИО/e-mail SD-01 и т.д. Это
-     детерминированный паттерн-скан по признакам словаря — не интерпретируй смысл диаграммы
-     сверх необходимого.
-   - **Растровые** (`.png .jpg .jpeg .gif .bmp .webp`): визуальный анализ изображения по всем
-     категориям с колонкой `image`: текст на скриншотах (адресные строки, вкладки, конфиги,
-     логины/пароли, внутренние домены), лица/фото людей (SD-01), подписи на схемах,
-     аббревиатуры. Осмотри изображение целиком, включая фон, вкладки браузера, док/панели ОС.
-5. **Emit issues**: одна находка = одна категория в одном файле (несколько вхождений — одна
-   находка с количеством). Код `CVAL-SENS`, severity — из таблицы категорий.
-   **АБСОЛЮТНОЕ правило: не воспроизводить найденное значение** (ни пароль, ни IP, ни ФИО,
-   ни домен целиком) ни в `message`, ни в `advice` — только категория + описание места
-   словами (`location_hint`). Если тип файла не поддержан или декодирование не удалось —
-   `CVAL-SENS-SKIP` (INFO, причина).
-6. **Write** `output_path` (always, even with empty `issues`).
+   - **`.drawio` / `.svg`** (text): decode base64 → XML. For `.drawio`, if `<diagram>` content is
+     additionally compressed (deflate+base64), inflate it. Scan the **text** against every category
+     with a `drawio` column: hosts/domains SD-04, IP/keys/hashes SD-05, login–password pairs SD-06,
+     abbreviations SD-08…SD-11, names/e-mail SD-01, etc. This is a deterministic pattern scan against
+     the dictionary signals — do not over-interpret diagram meaning.
+   - **Raster** (`.png .jpg .jpeg .gif .bmp .webp`): visual analysis against every category with an
+     `image` column: text on screenshots (address bars, tabs, configs, logins/passwords, internal
+     domains), faces/photos of people (SD-01), labels on diagrams, abbreviations. Inspect the whole
+     image, including background, browser tabs, OS dock/panels.
+5. **Emit issues**: one finding = one category in one file (multiple hits → one finding with a count).
+   Code `CVAL-SENS`, severity from the category table. **NEVER reproduce the found value** (no
+   password, IP, name, or full domain) in `message` or `advice` — only the category plus a
+   word-description of the location (`location_hint`). Unsupported type / decode failure →
+   `CVAL-SENS-SKIP` (INFO, reason).
+6. **Write `output_path`** (always, even with empty `issues`), then reply `written: <output_path>`.
 
 ## Output
 
-> **Все значения полей — строки; `null` остаётся `null`.**
+> **All JSON field values are strings; `null` stays `null`.**
 
 ```json
 {
@@ -72,15 +80,15 @@ Scans **one** file from a `resources/` folder for sensitive information. One sca
 }
 ```
 
-Issue fields и severity levels — как в worker skill; `position` для изображений — `null`.
+Issue fields and severity levels are as in the worker skill; `position` for images is `null`.
+`message`/`advice` are written in Russian (category IDs/terms as in the dictionary).
 
 ## Rules
 
-1. One scanner = exactly one file; один вызов `get_single_file`; лимит 5 МБ.
-2. Сканируй только по категориям `../sensitive-data.md`; учитывай исключения категорий
-   (SD-08: «не в именах собственных» — применять буквально, имена продуктов не флаговать).
-3. Никогда не цитируй найденные значения — категория + место словами.
-4. `advice` — императив, одно действие, без воспроизведения значения; иначе `null`.
-5. Always write `output_path` (empty `issues` if clean).
-6. Все значения полей в JSON — строки; `null` остаётся `null`. Язык — русский,
-   термины/ID категорий — как в словаре.
+1. One scanner = one file; one `get_single_file` call; 5 MB cap.
+2. Scan only by `../sensitive-data.md` categories; honor category exclusions (SD-08: "not in proper
+   names" — apply literally, do not flag product names).
+3. Never quote found values — category + location in words.
+4. `advice` — imperative, one action, without reproducing the value; else `null`.
+5. Always write `output_path` (empty `issues` if clean); reply is one confirmation line.
+6. All JSON field values are strings; `null` stays `null`. `message`/`advice` in Russian.

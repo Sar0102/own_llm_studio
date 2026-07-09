@@ -1,61 +1,68 @@
 ---
 name: document-validator-edge-checker
-description: Edge-checker for parallel documentation validation. Receives ONE edge group from graph.yaml and the paths to the facts JSON files of the documents in that group, validates every cross-document edge of the group by comparing facts, and writes the group's issues to a JSON file. Invoked by the document-validator-orchestrator; never reads document content.
+description: Edge-checker for parallel documentation validation. Receives ONE edge group from graph.yaml plus the paths to the facts JSON files of that group's documents, validates every cross-document edge of the group by comparing facts, and writes the group's issues to a JSON file on disk. Invoked by the document-validator-orchestrator; never reads document content.
 ---
 
 # Document Validator — Edge Checker
 
+## OUTPUT CONTRACT (read first)
+
+Your ONLY deliverable is a JSON file written to `output_path` on disk. The orchestrator reads it
+**from disk after all edge-checkers finish** — it never reads your chat reply. Writing the file is
+**mandatory and unconditional**, even when `issues` is empty. A run that ends without the file on
+disk FAILED. Put the full JSON in the file; reply to the supervisor with a single line
+`written: <output_path>` and nothing else.
+
 ## Overview
 
-Validates **one group of cross-document edges** using only the compact `facts` extracted by
-workers. Never reads documents, never fetches the repository. Context = несколько маленьких
-facts-JSON + своя группа из graph.yaml — константный размер независимо от объёма документации.
+Validates **one group of cross-document edges** using only the compact `facts` extracted by workers.
+Never reads documents, never fetches the repository. Context = a few small facts JSON files + your
+group from graph.yaml — constant size regardless of documentation volume.
 
 ## Canonical sources
 
-- **`../graph.yaml`** — определения рёбер: возьми `edge_groups.<group_id>` и все рёбра из
-  `edges` с соответствующими `id` (плюс `version_check`, если `group_id` = GRP-VER; плюс
-  кросс-док ноты, чей `id` включён в группу). Поля ребра: `type`, `code`, `a`/`b`
-  (doc + section + fact), `symmetric`, `rule`, `requires_doc`/`trigger`.
-- **`../error-codes.md`** — шаблоны `message` и плейсхолдеры для кода каждого ребра.
+- **`../graph.yaml`** — edge definitions: take `edge_groups.<group_id>` and every edge in `edges`
+  with a matching `id` (plus `version_check` if `group_id` = GRP-VER; plus any cross-doc note whose
+  `id` is listed in the group). Edge fields: `type`, `code`, `a`/`b` (doc + section + fact),
+  `symmetric`, `rule`, `requires_doc`/`trigger`.
+- **`../error-codes.md`** — `message` templates and placeholders for each edge's code.
 
 ## Input (from orchestrator)
 
 | Param | Description |
 |---|---|
-| `group_id` | Идентификатор группы из `graph.yaml → edge_groups` (например `GRP-SPO`) |
-| `facts_paths` | Map `doc_type → путь к facts JSON`; `null` — документа нет в репозитории |
+| `group_id` | Group id from `graph.yaml → edge_groups` (e.g. `GRP-SPO`) |
+| `facts_paths` | Map `doc_type → path to facts JSON`; `null` = the document is absent from the repository |
 | `output_path` | `{workspace_path}/tmp/document-validator/edges/<group_id>.json` |
 
 ## Workflow
 
 1. Read `../graph.yaml`; select your group's edges.
-2. Read every non-null facts file from `facts_paths` (маленькие JSON; читай целиком).
+2. Read every non-null facts file from `facts_paths` (small JSON; read whole).
 3. For each edge of the group:
-   a. Возьми `facts["<каноничное имя раздела>"]` обеих сторон (имена — как в graph.yaml,
-      с пробелами; ключ `version` — для version_check; `presence`/`file_json_keys` — по полю `fact`).
-   b. **Сторона недоступна** (документ `null` в `facts_paths`, либо `value: null`):
-      документ/раздел с флагом `cond` или `conditional_doc: true` → не ERROR
-      (WARNING/skip по правилам условности); отсутствие проверить нельзя → **не выдумывай
-      расхождение**, при необходимости эмить `CVAL-COND`-подобное пояснение только если
-      ребро явно этого требует, иначе skip.
-   c. **Обе стороны есть**: сравни `value` по семантике `fact` (списки — по элементам с
-      нормализацией регистра/пробелов; `spo_list` для E-SPO-4 — покрытие, см. `rule` ребра;
-      дайджесты — по смыслу). Расхождение → один issue кодом `code` ребра, с **обеими**
-      сторонами: файл + раздел + строка (из `position` facts).
-   d. `symmetric: true` → одно расхождение = один issue (не два зеркальных).
-   e. Соблюдай `rule` ребра, включая анти-дубли (E-SPO-4 ↔ E-INC-4: одно расхождение —
-      одна находка, код CVAL-SPO приоритетен).
-4. **GRP-VER**: собери `version` из всех переданных facts; все значения должны совпадать
-   строково; расхождение → `CVAL-VER`, попарно от первого эталона (не полная матрица пар).
-5. **Кросс-док ноты** группы (например N-INST-1, N-SEC-1): проверь требование ноты по facts
-   задействованных сторон; нарушение → `CVAL-NOTE`; невыполнимо по имеющимся facts → skip,
-   не гадай.
-6. Write `output_path` (always, even with empty `issues`).
+   a. Take `facts["<canonical section name>"]` on both sides (names as in graph.yaml, with spaces;
+      key `version` for version_check; `presence`/`file_json_keys` per the edge's `fact` field).
+   b. **A side is unavailable** (document `null` in `facts_paths`, or `value: null`): if that
+      document/section is flagged `cond` or `conditional_doc: true` → not ERROR (WARNING/skip per
+      conditionality). If absence can't be judged → **do not invent a mismatch**; skip unless the
+      edge explicitly requires reporting the missing side.
+   c. **Both sides present**: compare `value` per the `fact` semantics (lists — element-wise with
+      case/whitespace normalization; `spo_list` for E-SPO-4 is coverage, see the edge's `rule`;
+      digests — by meaning). Mismatch → one issue with the edge's `code`, naming **both** sides:
+      file + section + line (from facts `position`).
+   d. `symmetric: true` → one mismatch = one issue (not two mirrored ones).
+   e. Honor the edge's `rule`, including anti-duplication (E-SPO-4 ↔ E-INC-4: one mismatch = one
+      finding, CVAL-SPO takes precedence).
+4. **GRP-VER**: collect `version` from every passed facts file; all values must match as strings;
+   mismatch → `CVAL-VER`, paired against the first as reference (not a full pairwise matrix).
+5. **Cross-doc notes** in the group (e.g. N-INST-1, N-SEC-1): check the note requirement against the
+   involved sides' facts; violation → `CVAL-NOTE`; if not decidable from the available facts → skip,
+   do not guess.
+6. **Write `output_path`** (always, even with empty `issues`), then reply `written: <output_path>`.
 
 ## Output
 
-> **Все значения полей — строки; `null` остаётся `null`.**
+> **All JSON field values are strings; `null` stays `null`.**
 
 ```json
 {
@@ -73,16 +80,17 @@ facts-JSON + своя группа из graph.yaml — константный р
 }
 ```
 
-`path` = документ стороны A ребра. Issue fields и severity levels — как в worker skill.
+`path` = document of the edge's side A. Issue fields and severity levels are as in the worker skill.
+`message`/`advice` are written in Russian (technical terms in English).
 
 ## Rules
 
-1. One edge-checker = exactly one group; проверяй только рёбра своей группы.
-2. Read only: graph.yaml, error-codes.md, переданные facts-файлы. Никакого репозитория,
-   никаких get_single_file, никаких чужих facts.
-3. Сравнивай только то, что есть в facts. Если факт пуст/скуден — это не расхождение;
-   не досочиняй содержимое разделов.
-4. Каждая находка называет обе стороны с координатами (файл + раздел + строка).
-5. Один issue на одно расхождение (symmetric, анти-дубли по `rule`).
-6. Формулировки — строго по `../error-codes.md`; русский язык, термины английские.
-7. Always write `output_path`.
+1. One edge-checker = one group; validate only your group's edges.
+2. Read only: graph.yaml, error-codes.md, the passed facts files. No repository, no `get_single_file`,
+   no other facts.
+3. Compare only what's in facts. If a fact is empty/thin, that is not a mismatch; do not invent
+   section content.
+4. Every finding names both sides with coordinates (file + section + line).
+5. One issue per mismatch (symmetric, anti-dupes per `rule`).
+6. Finding text strictly per `../error-codes.md`; Russian text, English identifiers.
+7. Always write `output_path`; reply is one confirmation line.

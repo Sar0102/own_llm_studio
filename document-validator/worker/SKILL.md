@@ -1,132 +1,149 @@
 ---
 name: document-validator-worker
-description: Worker for parallel documentation validation. Receives ONE markdown file, validates its required sections (per graph.yaml), include directives and references (against the repository manifest), and intra-document notes; extracts cross-document facts and attachment lists; writes a per-file JSON. Invoked by the document-validator-orchestrator.
+description: Worker for parallel documentation validation. Receives ONE markdown file, validates its required sections (per graph.yaml), include directives and references (against the repository manifest), and intra-document notes; extracts cross-document facts and attachment lists; writes a per-file JSON to disk. Invoked by the document-validator-orchestrator.
 ---
 
 # Document Validator — Worker
 
+## OUTPUT CONTRACT (read first — this is the whole point of the job)
+
+Your ONLY deliverable is a JSON file written to `output_path` on disk. Nothing else counts.
+
+- The orchestrator reads results **from disk after all subagents finish**. It never reads your
+  chat reply. Returning the result in your text answer = the result is LOST.
+- Writing the file is **mandatory and unconditional** — write it even when `issues` is empty and
+  even when you only produced partial results. A run that ends without the file on disk FAILED.
+- Duties split: the full JSON (issues + facts) goes **into the file**; your text reply to the
+  supervisor is a single line — `written: <output_path>`. Never put JSON in the reply.
+- First action: note the `output_path` you were given. Last action: confirm the write tool was
+  called for exactly that path. If you are about to finish and have not written it, STOP and write.
+
 ## Overview
 
 Validates a **single** markdown document. One worker = one file (files are processed one at a
-time to keep context bounded).
-
-The worker checks the file in isolation: required sections, `include` targets, internal
-references, intra-document notes. It does **not** perform cross-document consistency and does
-**not** read binary attachments — instead it extracts compact **facts** (version, СПО list,
-components, scenarios, …) and an **attachments list**, which the orchestrator uses for
-cross-document checks (edge-checkers) and sensitive-data scanning (scanners).
+time to keep context bounded). The worker checks the file in isolation: required sections,
+`include` targets, internal references, intra-document notes. It does **not** perform
+cross-document consistency and does **not** read binary attachments — instead it extracts compact
+**facts** and an **attachments list** that the orchestrator uses for cross-document checks
+(edge-checkers) and sensitive-data scanning (scanners).
 
 ## Canonical sources
 
-- **`../graph.yaml`** — единственный источник истины по дереву разделов твоего типа документа
-  (`documents.<doc_type>.sections`), маркерам (`table`/`uml`/`ref`/`link`/`manual`), флагам
-  (`cond`/`gen`/`version_aware`), файлам-артефактам (`files`), интра-нотам
-  (`notes` со `scope: intra-doc`) и интра-рёбрам (`edges` со `scope: intra-doc` для твоего `doc`).
-  **Читай его первым.** Дублированного чеклиста в этом SKILL.md больше нет.
-- **`../error-codes.md`** — коды, шаблоны `message`, плейсхолдеры. Открой перед записью находок.
+- **`../graph.yaml`** — the single source of truth for your doc type's section tree
+  (`documents.<doc_type>.sections`), markers (`table`/`uml`/`ref`/`link`/`manual`), flags
+  (`cond`/`gen`/`version_aware`), artefact files (`files`), intra-doc notes (`notes` with
+  `scope: intra-doc`) and intra-doc edges (`edges` with `scope: intra-doc` for your `doc`).
+  **Read it first.** There is no duplicated checklist in this SKILL.md.
+- **`../error-codes.md`** — codes, `message` templates, placeholders. Open it before writing findings.
 
 ## Input (from orchestrator)
 
 | Param | Description |
 |---|---|
 | `file_path` | Repo-relative path to the single `.md` file — **remote repo, NOT a local path** |
-| `doc_type` | Optional hint; if absent, infer (folder / filename / front-matter; см. ключи `documents` и `aliases` в graph.yaml) |
+| `doc_type` | Optional hint; if absent, infer it (folder / filename / front-matter; see `documents` keys and `aliases` in graph.yaml) |
 | `file_id` | Sanitized relative path used for the output filename |
 | `output_path` | `{workspace_path}/tmp/document-validator/files/<file_id>.json` |
-| `manifest_path` | Путь к `manifest.json` — списку всех repo-relative путей файлов под `documentation/` |
+| `manifest_path` | Path to `manifest.json` — the list of every repo-relative file path under `documentation/` |
 
 ## Tools
 
-The repository is **remote** — the worker must never read repo files from the local filesystem.
+The repository is **remote** — never read repo files from the local filesystem.
 
-- **`get_single_file(path)`** — единственный способ получить содержимое файла репозитория.
-  Ровно **один** вызов — для своего `file_path`. Больше НИКАКИХ вызовов: существование
-  целей `include`/ссылок проверяется по манифесту, не пробными fetch'ами.
-- `manifest.json` и `graph.yaml` читаются с локального диска воркспейса (это не репозиторий).
+- **`get_single_file(path)`** is the only way to obtain repository file content. Call it **exactly
+  once**, for your own `file_path`. No other calls: existence of `include`/reference targets is
+  checked against the manifest, never by probe fetches.
+- `manifest.json` and `graph.yaml` are read from the local workspace disk (not the repository).
+- The write tool is used once, for `output_path` (Output Contract).
 
 ## Severity & Conditionality Rules (read first)
 
-Применяй **до** эмита любой находки — правила существуют, чтобы не плодить ложные ERROR.
+Apply these **before** emitting any finding — they exist to prevent false ERRORs.
 
 | Situation | Severity / Action |
 |---|---|
 | Mandatory section truly missing | `ERROR` |
 | Section legitimately N/A — metainfo contains `std_exception_reason` | `INFO` (never ERROR). Do not propose deleting the file. |
-| Section/doc flagged `cond` in graph.yaml, or note «при наличии…» | `WARNING` or skip — never `ERROR` |
+| Section/doc flagged `cond` in graph.yaml, or a note says "при наличии…" | `WARNING` or skip — never `ERROR` |
 | Section flagged `version_aware` and did not exist in the doc's version | `SUGGESTION` |
 | Section present via `include`/link to another file | count as **present**; verify the target via manifest |
 | Marker `uml` but an image found instead of a UML code block | `WARNING` (`CVAL-UML-IMG`), not "missing section" |
 | Section flagged `gen` (auto-generated) | do **not** flag as missing |
 | External / generated resource not stored in repo (`/info/*.json`, `required-software.json`, `rn-*.json`) | do **not** flag as a missing reference |
-| Marker `manual` satisfied by an `include` | `WARNING` — рукописный раздел не должен подключаться include'ом |
+| Marker `manual` satisfied by an `include` | `WARNING` — a handwritten section must not be pulled in via include |
 
 Reporting precision: include `position` (line / range) whenever known. For facts always record
 **where** (section + line) so edge-checkers can cite file + section + line.
 
 ### Metainfo handling
 
-If the file's front-matter / metadata block declares a section/document inapplicable
+If the front-matter / metadata block declares a section/document inapplicable
 (`std_exception_reason` present) → emit a single `INFO` (`CVAL-NA`) and suppress the
 corresponding missing-section `ERROR`s.
 
 ### Unknown doc type
 
-If the inferred type is **not** among `documents` keys/aliases in graph.yaml (e.g.
-`quick-guide`) — do not emit missing-sections ERRORs; emit one `INFO` that the type has no
+If the inferred type is **not** among the `documents` keys/aliases in graph.yaml (e.g.
+`quick-guide`) → do not emit missing-sections ERRORs; emit one `INFO` that the type has no
 defined mandatory sections, still extract `version` if present, then write the output.
 
 ## Workflow (single file)
 
-1. **Read graph.yaml** (`../graph.yaml`) — секцию `documents.<doc_type>` и интра-рёбра/ноты.
-2. **Read the file** via `get_single_file(file_path)` — единственный сетевой вызов.
-3. **Identify** doc type (hint or inference). Unknown → см. выше.
+1. **Read graph.yaml** (`../graph.yaml`): the `documents.<doc_type>` block plus its intra-doc edges/notes.
+2. **Read the file** via `get_single_file(file_path)` — the single network call.
+3. **Identify** doc type (hint or inference). Unknown → see above.
 4. **Metainfo**: `std_exception_reason` → INFO + suppress.
-5. **Section tree**: построй дерево заголовков файла и сравни с `sections` из graph.yaml
-   **включая вложенность** — каждый раздел И его подразделы под правильным родителем.
-   Сопоставление имён: каноничное имя graph.yaml ↔ заголовок документа без учёта регистра,
-   лишних пробелов и завершающей пунктуации; **не** переизобретай имена (никаких подчёркиваний).
-   Missing → `CVAL-SEC`/`CVAL-SUBSEC` (с учётом Severity-таблицы); присутствует не под тем
-   родителем → `CVAL-NEST` (WARNING). Пример правильной вложенности: «Настройка» и «Метрики» —
-   **соседи** под «Мониторинг» (не «Метрики» под «Настройка»).
-   Элементы `files` (например `lib.json`, `agent.json`, `db-models.json`, `deployment-units.json`)
-   — это **файлы, а не заголовки**: проверяй их существование по манифесту в папке документа;
-   не эмить `CVAL-SEC` за отсутствие «раздела» с таким именем.
-6. **Include & reference resolution — только по манифесту**:
-   a. Извлеки все `include` и внутрирепозиторные `.md`-ссылки из файла.
-   b. Нормализуй каждый путь **явным алгоритмом**: отрезать якорь `#...` и query `?...`;
-      убрать префикс `./`; разрешить `../` относительно **директории текущего файла**
-      (`file_path` без имени файла); привести к repo-relative виду с префиксом `documentation/`.
-   c. Точное совпадение с манифестом → цель существует; раздел, удовлетворённый include/ссылкой,
-      считается present.
-   d. Нет точного совпадения → **прежде чем эмитить ERROR**, поищи в манифесте по basename:
-      найден в другом месте → `CVAL-PATH` (WARNING, «неверный путь, файл существует по …»);
-      не найден нигде → `CVAL-INC`/`CVAL-REF` (ERROR).
+5. **Section tree**: build the heading tree of the file and compare it to `sections` from
+   graph.yaml **including nesting** — each section AND its subsections under the correct parent.
+   Name matching: canonical graph.yaml name ↔ document heading, ignoring case, extra whitespace and
+   trailing punctuation; **do not** reinvent names (no underscores). Missing → `CVAL-SEC` /
+   `CVAL-SUBSEC` (per the Severity table); present under the wrong parent → `CVAL-NEST` (WARNING).
+   Correct-nesting example: "Настройка" and "Метрики" are **siblings** under "Мониторинг" (Метрики
+   is NOT under Настройка). Entries in `files` (e.g. `lib.json`, `agent.json`, `db-models.json`,
+   `deployment-units.json`) are **files, not headings**: check their existence in the document
+   folder via the manifest; do not emit `CVAL-SEC` for a missing "section" with that name.
+6. **Include & reference resolution — manifest only**:
+   a. Extract every `include` and in-repo `.md` reference from the file.
+   b. Normalize each path with an **explicit algorithm**: strip anchor `#...` and query `?...`;
+      drop leading `./`; resolve `../` relative to the **current file's directory** (`file_path`
+      without its filename); express as repo-relative with the `documentation/` prefix.
+   c. Exact match in the manifest → target exists; a section satisfied by an include/link counts present.
+   d. No exact match → **before emitting ERROR**, search the manifest by basename: found elsewhere
+      → `CVAL-PATH` (WARNING, "wrong path, file exists at …"); found nowhere → `CVAL-INC` / `CVAL-REF` (ERROR).
    e. Skip external/generated resources (`/info/*.json`, `required-software.json`, `rn-*.json`).
-   f. **Никогда** не проверяй существование через `get_single_file` — сетевые ошибки
-      неотличимы от «файла нет» и дают ложные ERRORs.
-7. **Content-type checks**: marker `uml` → в разделе должен быть блок кода UML; изображение
-   вместо блока → `CVAL-UML-IMG` (WARNING). Marker `manual` → раздел не через include.
-8. **Intra-doc edges & notes**: рёбра `scope: intra-doc` своего документа (для `architecture` —
-   E-INC-1..3: раздел должен опираться на «Компоненты») → `CVAL-INC-IN`; ноты
-   `scope: intra-doc` → `CVAL-NOTE`. Ноты `scope: cross-doc` (например СПО-нота
-   installation-guide) **не проверяй** — их проверяет edge-checker; у тебя нет других файлов.
-9. **Attachments**: собери список бинарных/графических вложений, на которые ссылается файл
-   (пути в `resources/` и т.п.), в `facts.attachments` — **не читай их содержимое**.
-   Скан чувствительных данных делает отдельный scanner по манифесту.
-10. **Extract facts** — см. ниже.
-11. **Write** `output_path` (always, even with empty `issues`).
+   f. **Never** check existence via `get_single_file` — network errors are indistinguishable from
+      "file missing" and produce false ERRORs.
+7. **Content-type checks**: marker `uml` → the section must contain a UML code block; an image
+   instead of the block → `CVAL-UML-IMG` (WARNING). Marker `manual` → section not via include.
+8. **Intra-doc edges & notes**: edges with `scope: intra-doc` for your document (for `architecture`,
+   E-INC-1..3: the section must build on "Компоненты") → `CVAL-INC-IN`; notes with `scope:
+   intra-doc` → `CVAL-NOTE`. Notes with `scope: cross-doc` (e.g. the installation-guide SPO note)
+   are **not** yours — the edge-checker validates them; you have no other files.
+9. **Attachments**: collect the binary/graphic attachments referenced by the file (paths under
+   `resources/` etc.) into `facts.attachments` — **do not read their content**. Sensitive-data
+   scanning is done by a separate scanner from the manifest.
+10. **Extract facts** — MANDATORY, see "Fact Extraction". Even for a clean document, facts are how
+    edge-checkers work; an empty `facts` object silently breaks every cross-document check that
+    depends on this document. Always populate the required endpoint sections (use `value: null`
+    for genuinely absent ones — never omit the key).
+11. **Write `output_path`** — MANDATORY, ALWAYS, even with empty `issues` or partial results. This
+    is the only deliverable (Output Contract). Call the write tool now.
+12. **Self-check**: was the write tool called for the exact `output_path`? Is `facts` populated
+    (not `{}`)? If either is no, fix it before ending. Then reply to the supervisor with the single
+    line `written: <output_path>` and nothing else.
 
 ## Fact Extraction (section-keyed)
 
-Facts let edge-checkers run cross-document edges **without reading files**. `facts` is keyed by
-the **canonical section name from graph.yaml** (с пробелами/дефисами, как в реальных заголовках);
-each value is `{ "value", "position" }`.
+Facts let edge-checkers run cross-document edges **without reading files**. `facts` is keyed by the
+**canonical section name from graph.yaml** (with spaces/hyphens, as in real headings); each value
+is `{ "value", "position" }`.
 
-Extract **only** the sections of this document that are endpoints of a `scope: cross-doc` edge
-in graph.yaml (найди рёбра, где `a.doc`/`b.doc` = твой doc_type), plus `version` if the document
-declares a product version (front-matter или раздел версии). Формат `value` — по `fact` ребра
-и описанию в `fact_specs` graph.yaml: списки имён/элементов или дайджест ≤ 15 строк, **не**
-полный текст раздела. Качество дайджеста критично — чекер сравнивает только его.
+Extract **only** the sections of this document that are endpoints of a `scope: cross-doc` edge in
+graph.yaml (find edges where `a.doc`/`b.doc` = your doc_type), plus `version` if the document
+declares a product version (front-matter or a version section). The `value` format follows the
+edge's `fact` and the `fact_specs` descriptions in graph.yaml: lists of names/elements or a digest
+of ≤ 15 lines — **not** the full section text. Digest quality is critical: the checker compares
+only this.
 
 ```json
 {
@@ -139,13 +156,13 @@ declares a product version (front-matter или раздел версии). Фо
 ```
 
 If an endpoint section is absent, set its `value` to `null` (keep `position` null) — the
-edge-checker reports the missing side per the severity rules. Extract values from the same
-section tree you validated at step 5, with real positions.
+edge-checker reports the missing side per the severity rules. Extract values from the same section
+tree you validated at step 5, with real positions.
 
 ## Output (per-file file)
 
-> **Все значения полей в JSON сериализуются как строки (тип `string`), даже если значение
-> числовое — например `"position": "42"`. Значение `null` остаётся `null`.**
+> **All JSON field values are serialized as strings (type `string`), even numeric ones — e.g.
+> `"position": "42"`. `null` stays `null`.**
 
 Write to `output_path`:
 
@@ -167,45 +184,48 @@ Write to `output_path`:
 }
 ```
 
+`message`/`advice` are written in Russian (see Finding Writing Guidance); everything else is structural.
+
 ### Issue Fields
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `code` | string | Yes | Код правила из `../error-codes.md` (семейство `CVAL-*`) |
+| `code` | string | Yes | Rule code from `../error-codes.md` (family `CVAL-*`) |
 | `severity` | enum | Yes | `ERROR` \| `WARNING` \| `INFO` \| `SUGGESTION` |
-| `path` | string | Yes | Путь к файлу с префиксом `documentation/` |
-| `message` | string | Yes | Описание (на русском) |
-| `position` | string\|null | No | Строка/диапазон в источнике |
-| `advice` | string\|null | No | Рекомендация по исправлению |
+| `path` | string | Yes | File path with the `documentation/` prefix |
+| `message` | string | Yes | Description (Russian) |
+| `position` | string\|null | No | Line / range in the source |
+| `advice` | string\|null | No | Fix suggestion (Russian) |
 
 ### Severity Levels
 
 | Level | Description |
 |---|---|
-| `ERROR` | Реально отсутствует обязательный раздел / битый include / битая ссылка (нет в манифесте) |
-| `WARNING` | Условные/автогенерируемые разделы, UML заменён картинкой, неверный путь при существующем файле, вложенность |
-| `INFO` | Раздел неприменим по метаинформации, неизвестный тип документа |
-| `SUGGESTION` | Раздел не существовал в версии документа |
+| `ERROR` | A mandatory section is really missing / broken include / broken reference (not in manifest) |
+| `WARNING` | Conditional/auto-generated sections, UML replaced by image, wrong path to an existing file, nesting |
+| `INFO` | Section N/A per metainfo, unknown doc type |
+| `SUGGESTION` | Section did not exist in the document's version |
 
 ## Finding Writing Guidance
 
-Коды, шаблоны `message` и плейсхолдеры — **только** в `../error-codes.md`; открой его перед
-записью каждой находки. Кратко: одно-два предложения по факту (что + где: раздел, `position`);
-без модальности и эмоций; конкретика вместо общего; термины в backticks, названия разделов
-в «ёлочках» в каноничном написании graph.yaml; `advice` — императив, одно действие, иначе `null`;
-текст не меняет severity.
+Codes, `message` templates and placeholders live **only** in `../error-codes.md`; open it before
+writing each finding. The `message` and `advice` text is written **in Russian**, technical terms
+and identifiers in English (`include`, `front-matter`, section/file names). Rules: one or two
+factual sentences (what + where: section, `position`); no modality or emotion; specifics over
+generalities; identifiers in backticks, section names in «ёлочки» using the canonical graph.yaml
+spelling; `advice` is imperative, one action, else `null`; the text never changes severity.
 
 Don't: ❌ «Похоже, со структурой что-то не так» → ✅ «Отсутствует раздел «Удаление» в
-`installation-guide` (L103)». ❌ хвалебные/извинительные вставки, вопросы, мета-комментарии.
+`installation-guide` (L103)». ❌ praise/apology, questions to the reader, meta-commentary.
 
 ## Rules
 
-1. Validate **only** the assigned `file_path`; one worker = one file; один вызов `get_single_file`.
+1. Validate **only** the assigned `file_path`; one worker = one file; one `get_single_file` call.
 2. Apply the Severity & Conditionality table before emitting any issue.
-3. Existence of include/reference targets — **только по манифесту** (шаг 6), с fallback по basename.
+3. Existence of include/reference targets — **manifest only** (step 6), with basename fallback.
 4. Do not flag external/generated resources or auto-generated JSON as missing.
 5. Do not read binary attachments — only list them in `facts.attachments`.
 6. Do not perform cross-document consistency and do not validate cross-doc notes — extract facts only.
-7. Always write `output_path` (empty `issues` if clean).
-8. Все значения полей в JSON — строки, даже числовые; `null` остаётся `null`.
-9. Output messages in Russian; keep product/technical terms in English.
+7. Always write `output_path` (empty `issues` if clean); reply is one confirmation line.
+8. All JSON field values are strings, even numeric; `null` stays `null`.
+9. `message`/`advice` in Russian; keep product/technical terms in English.

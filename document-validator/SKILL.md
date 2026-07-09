@@ -1,133 +1,130 @@
 ---
 name: document-validator-orchestrator
-description: Orchestrator for parallel documentation validation. Discovers every markdown file under documentation/documents, builds a repository manifest, dispatches one worker PER FILE (parallel batches), dispatches edge-checkers for cross-document consistency groups from graph.yaml, dispatches sensitive-data scanners for resources/ images, and merges everything into consistency-validator.json.
+description: Orchestrator for parallel documentation validation. Discovers every markdown file under documentation/documents, builds a repository manifest, dispatches one worker PER FILE and one scanner PER resources file (parallel batch), then dispatches edge-checkers for cross-document consistency groups from graph.yaml, and merges every subagent's on-disk result into consistency-validator.json.
 ---
 
 # Document Validator — Orchestrator
 
-## Overview
+## YOU ARE A DISPATCHER (read first — hard constraints)
 
-Coordinates documentation validation with **per-file** granularity and a **constant-size context**:
-the orchestrator never reads document content, never reads full facts files, and never compares
-sections itself. It only discovers, dispatches, tracks, and merges.
+You coordinate subagents. You do NOT do their work. Specifically:
 
-Division of labour:
+- You MUST NOT read document content, build section trees, compare sections, resolve includes, or
+  scan files yourself. If you catch yourself reading a document or validating it, you have broken
+  your role — stop and dispatch a subagent instead.
+- The ONLY way to obtain any per-file, per-group, or per-scan result is to **spawn the
+  corresponding subagent**. There is no fallback where you produce results directly.
+- All inter-agent communication is **through files on disk**. Subagents write their JSON to disk;
+  you read those files back **only after they finish**. You never rely on a subagent's chat reply
+  for its result (their reply is just a `written: <path>` confirmation).
+- **Spawn in batches, not one-by-one.** For each wave, emit ALL spawn calls for that wave in a
+  single turn (one assistant turn containing many parallel spawn tool-calls). Do NOT spawn one
+  subagent, wait for it, then spawn the next — that serializes the whole run. Issue the whole batch,
+  then wait for the batch to complete.
+- Self-check before finishing: did you avoid every file-read / validation tool? Did you dispatch
+  every unit? Did you read results from disk (not from replies)? If any is no, fix it.
 
-| Agent | Does | Context |
-|---|---|---|
-| **worker** (`worker/SKILL.md`) | one file: sections, includes, refs, notes(intra), facts | 1 файл + graph.yaml |
-| **edge-checker** (`edge-checker/SKILL.md`) | one edge group: cross-doc consistency from facts | 2–5 маленьких facts JSON |
-| **scanner** (`scanner/SKILL.md`) | one `resources/` file: sensitive data | 1 файл + sensitive-data.md |
-| **orchestrator** (this) | discovery, manifest, dispatch, doc-existence edges, merge | списки путей + статусы |
+## Canonical sources (skill root)
 
-## Canonical sources (в корне скилла)
+- **`./graph.yaml`** — the single source of truth: doc types, section trees, markers/flags, notes,
+  and **every** consistency edge (with `scope`, `code`, `group`). If anything here disagrees with
+  `graph.yaml`, `graph.yaml` wins.
+- **`./error-codes.md`** — finding codes, `message` templates, placeholder rules.
+- **`./sensitive-data.md`** — sensitive-information dictionary for scanning `resources/`.
 
-- **`./graph.yaml`** — единственный источник истины: типы документов, деревья разделов,
-  маркеры/флаги, ноты и **все** рёбра консистентности (с `scope`, `code`, `group`).
-  Если что-либо в этом SKILL.md противоречит `graph.yaml` — прав `graph.yaml`.
-- **`./error-codes.md`** — коды находок, шаблоны `message`, правила плейсхолдеров.
-- **`./sensitive-data.md`** — словарь чувствительной информации для скана `resources/`.
+There is no PlantUML diagram anymore (it caused the ambiguities: nesting via `___`, semantics via
+colour, node aliases). Do not reconstruct it or rely on memory of it.
 
-PlantUML-диаграммы больше нет: она была источником неоднозначностей (вложенность через
-`___`, семантика через цвет, алиасы узлов). Не восстанавливать её и не опираться на память о ней.
+## Subagents you dispatch
+
+| Subagent (`name`) | Unit of work | Reads | Writes |
+|---|---|---|---|
+| `document-validator-worker` | one `.md` file | its file + graph.yaml + manifest | `files/<file_id>.json` |
+| `document-validator-scanner` | one `resources/` file | its file + sensitive-data.md | `scans/<file_id>.json` |
+| `document-validator-edge-checker` | one edge group | graph.yaml + that group's facts files | `edges/<group_id>.json` |
 
 ## Paths
 
 | Purpose | Path |
 |---|---|
 | Discovery root | `documentation/documents` |
-| Repository manifest (orchestrator writes) | `{workspace_path}/tmp/document-validator/manifest.json` |
+| Repository manifest (you write) | `{workspace_path}/tmp/document-validator/manifest.json` |
 | Per-file results (workers write) | `{workspace_path}/tmp/document-validator/files/<file_id>.json` |
 | Edge-group results (edge-checkers write) | `{workspace_path}/tmp/document-validator/edges/<group_id>.json` |
 | Scanner results (scanners write) | `{workspace_path}/tmp/document-validator/scans/<file_id>.json` |
-| Final report (orchestrator writes) | `{workspace_path}/reports/consistency-validator.json` |
+| Final report (you write) | `{workspace_path}/reports/consistency-validator.json` |
 
-`workspace_path` = `/docstorage/tmp/{{workflow.uid}}/`. `<file_id>` = путь относительно
-`documents` с `/` → `__` (например `developer-guide__index.md`, `architecture__resources__scheme.png`).
+`workspace_path` = `/docstorage/tmp/{{workflow.uid}}/`. `<file_id>` = path relative to `documents`
+with `/` → `__` (e.g. `developer-guide__index.md`, `architecture__resources__scheme.png`).
 
 ## Workflow
 
 ### Phase 0: Discovery & Manifest
 
 1. Use the remote repository integration (source-control tool) for the provided URL — **do not clone locally**.
-2. Enumerate the **full file tree** under `documentation/` via the repository listing call
-   (one remote listing, no file contents). If `documentation/documents` does not exist — stop
-   and report that no documents folder was found.
-3. Write **`manifest.json`**: плоский JSON-массив всех repo-relative путей файлов под
-   `documentation/`. Манифест — единственный способ проверки существования файлов для всех
-   субагентов (никаких «пробных» `get_single_file` ради проверки существования).
+2. Enumerate the **full file tree** under `documentation/` via one repository listing call (no file
+   contents). If `documentation/documents` does not exist — stop and report no documents folder.
+3. Write **`manifest.json`**: a flat JSON array of every repo-relative file path under
+   `documentation/`. The manifest is the single existence-check source for all subagents.
 4. From the manifest derive two work lists:
-   - **doc files**: every `.md` under `documentation/documents` → по одному worker.
-   - **scan targets**: every file under any `resources/` folder (`**/resources/*`) with
-     extensions `.png .jpg .jpeg .gif .bmp .webp .svg .drawio` → **dedupe by path** →
-     по одному scanner. Один и тот же файл, на который ссылаются несколько документов,
-     сканируется ровно один раз.
+   - **doc files**: every `.md` under `documentation/documents` → one worker each.
+   - **scan targets**: every file under any `resources/` folder (`**/resources/*`) with extensions
+     `.png .jpg .jpeg .gif .bmp .webp .svg .drawio` → **dedupe by path** → one scanner each.
 5. Create the tmp directories (`files/`, `edges/`, `scans/`).
 
-### Phase 1: Parallel Dispatch — workers (one per .md file)
+### Phase 1: Wave 1 — workers + scanners (single parallel batch)
 
-For each doc file spawn a `document-validator-worker` and pass:
-- `file_path` — repo-relative путь (remote; worker читает через `get_single_file`).
-- `doc_type` — inferred from the folder, if known (worker may re-infer).
-- `file_id`, `output_path` — `.../files/<file_id>.json`.
-- `manifest_path` — путь к `manifest.json` (для проверки include/ссылок).
+Emit, in ONE turn, a spawn call for every doc file AND every scan target:
 
-Run in **parallel batches**. Workers never write the final report and never compare files.
+- **worker** per doc file, passing: `file_path`, `doc_type` (inferred from folder, may be re-inferred),
+  `file_id`, `output_path` = `.../files/<file_id>.json`, `manifest_path`.
+- **scanner** per scan target, passing: `file_path`, `file_id`, `output_path` = `.../scans/<file_id>.json`.
 
-### Phase 1b: Parallel Dispatch — scanners (one per resources file)
-
-For each scan target spawn a `document-validator-scanner` and pass:
-- `file_path`, `file_id`, `output_path` — `.../scans/<file_id>.json`.
-
-Scanners can run in the same batch wave as workers — they are independent.
-Files > 5 MB are skipped by the scanner itself (`CVAL-SENS-SKIP`).
+Workers and scanners are independent — they belong in the same wave. Do not wait between spawns.
 
 ### Phase 2: Join & Completeness
 
-- Wait until every dispatched worker and scanner finished.
-- Confirm the output JSON exists for every dispatched unit. Missing → retry once, or record:
-  ```
+- Wait until every dispatched worker and scanner has finished.
+- Confirm the output JSON exists on disk for every dispatched unit. Missing → retry once, else record:
+  ```json
   { "code": "CVAL-WORKER", "severity": "WARNING", "path": "documentation/documents/<file>",
     "message": "Субагент не вернул результат по `<file>`." }
   ```
-- Build the **facts index**: `doc_type → путь к facts-файлу` (только маппинг путей;
-  содержимое facts оркестратор НЕ читает).
+- Build the **facts index**: `doc_type → path to that doc's facts file` (paths only; you do not read
+  facts content, except the single `presence` flags needed in Phase 3a).
 
-### Phase 3a: Doc-existence edges (orchestrator, по манифесту)
+### Phase 3a: Doc-existence edges (you, from the manifest)
 
-Проверяются рёбра `graph.yaml` со `scope: doc-existence` — им не нужны facts-сравнения,
-только манифест плюс один флаг присутствия триггер-раздела из facts-файла architecture
-(единственное точечное чтение: одно маленькое поле `presence`):
+Handle `graph.yaml` edges with `scope: doc-existence` — these need only the manifest plus the single
+`presence` flag of a trigger section from the architecture facts file (one narrow field read):
 
-- `E-DEP-1`, `E-DEP-2` → `CVAL-DEP`: триггер-раздел непуст, а требуемый документ
-  отсутствует в манифесте → WARNING (документ опционален, поэтому не ERROR).
-- `E-LINK-1` → `CVAL-LINK`: раздел-ссылка architecture ведёт в `deployment`,
-  которого нет в манифесте → ERROR.
+- `E-DEP-1`, `E-DEP-2` → `CVAL-DEP`: trigger section is non-empty but the required doc is absent from
+  the manifest → WARNING (the doc is optional, so not ERROR).
+- `E-LINK-1` → `CVAL-LINK`: the architecture link section points to `deployment`, absent from the
+  manifest → ERROR.
 
-### Phase 3b: Parallel Dispatch — edge-checkers (one per edge group)
+### Phase 3b: Wave 2 — edge-checkers (single parallel batch)
 
-For each group in `graph.yaml → edge_groups` (GRP-SPO, GRP-DEPLOY, GRP-ARCH, GRP-SCEN,
-GRP-RN, GRP-DEP, GRP-VER) spawn a `document-validator-edge-checker` and pass:
+Emit, in ONE turn, a spawn call for every group in `graph.yaml → edge_groups` (GRP-SPO, GRP-DEPLOY,
+GRP-ARCH, GRP-SCEN, GRP-RN, GRP-DEP, GRP-VER). For each `document-validator-edge-checker` pass:
+
 - `group_id`.
-- `facts_paths` — map `doc_type → путь к facts JSON` только для docs этой группы.
-  Если документа нет в репозитории — передай `null`; чекер применит правила
-  условности (conditional doc → не ERROR).
-- `output_path` — `.../edges/<group_id>.json`.
+- `facts_paths` — map `doc_type → path to facts JSON` for that group's docs only; `null` if the doc
+  is absent from the repository (the checker applies conditionality rules).
+- `output_path` = `.../edges/<group_id>.json`.
 
-Чекер читает `../graph.yaml` (свою группу), `../error-codes.md` и только переданные
-facts-файлы. Кросс-документные ноты (`scope: cross-doc` в graph.yaml) проверяет чекер
-группы, в которую нота включена.
+Wait until every edge-checker has finished.
 
 ### Phase 4: Merge & Write
 
-1. Concatenate issues из всех трёх источников: `files/*.json` + `edges/*.json` + `scans/*.json`
-   + собственные находки Phase 2/3a.
+1. Read from disk and concatenate issues from all three sources: `files/*.json` + `edges/*.json` +
+   `scans/*.json`, plus your own Phase 2/3a issues.
 2. Deduplicate identical issues (`code` + `path` + `message`).
 3. Sort by severity (`ERROR` → `WARNING` → `SUGGESTION` → `INFO`), then by `path`.
 4. Write the final report:
 
-> **Все значения полей в JSON сериализуются как строки (тип `string`), даже если значение
-> числовое — например `"priority": "15"`. Значение `null` остаётся `null`.**
+> **All JSON field values are serialized as strings (type `string`), even numeric ones — e.g.
+> `"priority": "15"`. `null` stays `null`.**
 
 ```json
 {
@@ -146,28 +143,26 @@ facts-файлы. Кросс-документные ноты (`scope: cross-doc`
 }
 ```
 
-Save **only** to `{workspace_path}/reports/consistency-validator.json`. Issue fields,
-severity levels and the `documentation/` path prefix are defined in the worker skill and
-preserved during merge. Merge — чисто механическая операция (конкатенация/дедуп/сортировка);
-при возможности выноси её в детерминированный шаг DAG вместо LLM.
+Save **only** to `{workspace_path}/reports/consistency-validator.json`. Merge is a purely
+mechanical operation (concatenate / dedupe / sort); prefer running it as a deterministic DAG step
+rather than as an LLM turn where possible.
 
 ## Rules
 
-1. The orchestrator never reads document content and never reads facts files целиком —
-   only path lists, statuses, and single `presence` flags for Phase 3a.
-2. One worker = exactly one file; one scanner = exactly one file; one edge-checker = exactly one group.
-3. File existence is checked **only** against `manifest.json` — никаких пробных fetch'ей.
-4. Every cross-document/version issue names file + section + line (это делает чекер; оркестратор не переписывает).
-5. Finalize only after all subagents are present (or failures recorded as `CVAL-WORKER`).
-6. Do not modify issue contents during merge — only concatenate, dedupe, sort.
-7. Do not scan anything outside `documentation/`.
-8. Все значения полей в JSON — строки, даже числовые; `null` остаётся `null`.
+1. Never read document content; never read facts files whole — only path lists, statuses, and the
+   single `presence` flags for Phase 3a.
+2. One worker = one file; one scanner = one file; one edge-checker = one group.
+3. File existence is checked **only** against `manifest.json` — no probe fetches.
+4. Spawn each wave as a single parallel batch; never serialize spawns.
+5. Read subagent results **from disk after they finish**, never from their chat replies.
+6. Finalize only after all subagents are accounted for (or recorded as `CVAL-WORKER`).
+7. Do not modify issue contents during merge — only concatenate, dedupe, sort.
+8. Do not scan anything outside `documentation/`.
+9. All JSON field values are strings, even numeric; `null` stays `null`.
 
 ## Finding Writing Guidance
 
-Правила формулировок (`message`/`advice`), коды, шаблоны и плейсхолдеры определены в
-**`./error-codes.md`** — единственном месте. Перед записью каждой собственной находки
-(Phase 2/3a) открой его и возьми оттуда `code`, шаблон и правила подстановки.
-Кратко: русский язык, термины на английском; конкретика (файл + раздел + строка);
-без модальности и эмоций; для кросс-док находок — обе стороны с координатами;
-текст находки не меняет severity.
+Finding text rules, codes, templates and placeholders are defined **only** in `./error-codes.md`.
+Before writing any of your own findings (Phase 2/3a), open it and take the `code`, template and
+placeholder rules from there. In short: `message`/`advice` in Russian, technical terms in English;
+be specific (file + section + line); no modality or emotion; the text never changes severity.
