@@ -1,0 +1,553 @@
+# Document Validator — канонический граф (ЕДИНСТВЕННЫЙ источник истины)
+# ============================================================================
+# Этот файл заменяет PlantUML-диаграмму. Читают ВСЕ субагенты:
+#   worker        → documents.<doc_type>.sections / files / notes(scope: intra-doc)
+#                   + edges со scope: intra-doc
+#   edge-checker  → edge_groups и edges со scope: cross-doc (свою группу)
+#   orchestrator  → edges со scope: doc-existence, edge_groups (диспатч), version_check
+#   scanner       → не читает граф (работает по sensitive-data.md)
+#
+# Правила чтения:
+# - Имена разделов КАНОНИЧНЫЕ: с пробелами и дефисами, как в реальных заголовках
+#   документов («Чек-лист проверки корректности работы»). Никаких подчёркиваний.
+# - Эти же имена — ключи в facts. Сопоставление заголовка документа с именем
+#   графа: сравнение без учёта регистра, лишних пробелов и завершающей пунктуации.
+# - Вложенность ТОЛЬКО через children. Порядок разделов не проверяется.
+# - markers: table (ожидается таблица), uml (ожидается блок кода UML),
+#   ref (контент по ссылке — АС Документация Сотрудники и т.п.),
+#   link (раздел-ссылка), manual (рукописный, НЕ include).
+# - flags: cond (условный — не ERROR при отсутствии), gen (автогенерируемый —
+#   не флаговать), version_aware (не было в старых версиях → SUGGESTION).
+# - files: файлы-артефакты документа. Это НЕ заголовки! Проверять существование
+#   по манифесту, а не искать раздел с таким названием.
+
+documents:
+
+  about:
+    title: "Описание"
+    sections:
+      - name: "Назначение"
+      - name: "Преимущества"
+      - name: "Системные требования"
+        children:
+          - name: "Необходимое программное обеспечение"
+            markers: [ref]
+          - name: "Аппаратное обеспечение"
+            markers: [table]
+      - name: "Типовые решения"
+        children:
+          - name: "Типовое решение"
+      - name: "Концептуальная модель предметной области"
+        markers: [uml]
+      - name: "Основные функции"
+        markers: [table]
+      - name: "Варианты и сценарии использования"
+        markers: [uml]
+        children:
+          - name: "Сценарий использования"
+          - name: "Сценарий использования n"
+      - name: "Нефункциональные особенности"
+      - name: "Совместимость с выпущенными клиентами"
+    notes:
+      - id: N-ABOUT-1
+        scope: intra-doc          # проверяет worker
+        text: >
+          В «Основные функции» перечисляются только сущностные функции;
+          полный перечень — в «Варианты и сценарии использования».
+
+  architecture:
+    title: "Детальная архитектура"
+    sections:
+      - name: "Структура"
+        children:
+          - name: "Компонентно-логическая диаграмма"
+            markers: [uml]
+          - name: "Компоненты"
+            markers: [table]
+          - name: "Программные интерфейсы"
+          - name: "Схемы структур данных"
+          - name: "Физические модели баз данных"
+          - name: "Элементы развертывания"
+            markers: [table]
+          - name: "Диаграммы развертывания"
+            markers: [link]
+      - name: "Поведение"
+        children:
+          - name: "Взаимодействия"
+            markers: [table]
+          - name: "Диаграммы последовательностей"
+            markers: [uml]
+          - name: "Механизмы безопасности"
+          - name: "Прочие поведенческие механизмы"
+      - name: "Прочие аспекты"
+        children:
+          - name: "Сценарии отказа"
+            markers: [table]
+    notes:
+      - id: N-AR-1
+        scope: intra-doc
+        text: >
+          Компонентно-логическая диаграмма основана на: Компоненты,
+          Варианты и сценарии использования (акторы), Программные интерфейсы,
+          Взаимодействия.
+      - id: N-AR-2
+        scope: intra-doc
+        text: >
+          Диаграммы последовательностей — графическое представление каждого
+          use case.
+
+  deployment:
+    title: "Диаграммы развертывания"
+    sections:
+      - name: "Типовые варианты развертывания"
+        children:
+          - name: "Вариант развертывания"
+            flags: [cond]   # допустим один типовой вариант, дубль схем не требовать
+
+  installation-guide:
+    title: "Руководство по установке"
+    sections:
+      - name: "Подготовка окружения"
+        children:
+          - name: "Подготовка элементов развертывания"
+          - name: "Настройка окружения"
+          - name: "Выпуск и подготовка сертификатов"
+      - name: "Установка"
+        children:
+          - name: "Порядок установки"
+          - name: "Настройка интеграции"
+            flags: [cond]
+      - name: "Чек-лист проверки корректности работы"
+      - name: "Обновление"
+        children:
+          - name: "Изменения в системных требованиях"
+          - name: "Изменения в параметрах настройки"
+      - name: "Откат"
+      - name: "Удаление"
+      - name: "Часто встречающиеся проблемы и пути их устранения"
+    notes:
+      - id: N-INST-1
+        scope: cross-doc          # проверяется на уровне рёбер (E-SPO-*), НЕ воркером
+        text: >
+          СПО в Руководстве по установке отражается на Диаграммах развертывания
+          и в Системных требованиях.
+
+  administration-guide:
+    title: "Руководство администратора"
+    sections:
+      - name: "Сценарии администрирования"
+        children:
+          - name: "Как определить версию продукта"
+          - name: "Сценарий администрирования"
+      - name: "Системный журнал"
+        children:
+          - name: "Настройка системного журнала"
+          - name: "Доступ к системному журналу"
+          - name: "Основные события"
+      - name: "Мониторинг"
+        children:                 # «Настройка» и «Метрики» — СОСЕДИ под «Мониторинг»
+          - name: "Настройка"
+          - name: "Метрики"
+            markers: [table]
+      - name: "Часто встречающиеся проблемы и пути их устранения"
+
+  agent-guide:
+    title: "Руководство прикладного администратора"
+    conditional_doc: true         # обязателен только по ребру E-DEP-1
+    files:
+      - "agent.json"
+    sections:
+      - name: "Общие сведения"
+        markers: [ref]
+      - name: "Установка"
+        children:
+          - name: "Порядок установки"
+      - name: "Обновление"
+      - name: "Удаление"
+      - name: "Часто встречающиеся проблемы и пути их устранения"
+
+  user-guide:
+    title: "Руководство пользователя"
+    conditional_doc: true         # обязателен только по ребру E-DEP-2
+    sections:
+      - name: "Доступ к приложению"
+        children:
+          - name: "Запуск приложения"
+          - name: "Вход и выход"
+          - name: "Порядок доступа"
+          - name: "Роли пользователей"
+            markers: [manual]     # рукописный — include недопустим
+      - name: "Использование приложения"
+        children:
+          - name: "Сценарий использования"
+          - name: "Как определить версию продукта"
+      - name: "Настройка приложения"
+      - name: "Часто встречающиеся проблемы и пути их устранения"
+
+  developer-guide:
+    title: "Руководство прикладного разработчика"
+    conditional_doc: true         # при наличии библиотеки (клиентский модуль, фреймворк)
+    files:
+      - "lib.json"
+    sections:
+      - name: "Общие сведения"
+        markers: [ref]
+      - name: "Подключение и конфигурирование"
+      - name: "Миграция на текущую версию"
+      - name: "Быстрый старт"
+        markers: [link]           # ссылка на example.zip
+      - name: "Использование"
+        children:
+          - name: "Сценарий использования"
+      - name: "Часто встречающиеся проблемы и пути их устранения"
+
+  security-guide:
+    title: "Руководство по безопасности"
+    sections:
+      - name: "Идентификация и аутентификация"
+      - name: "Авторизация"
+      - name: "Безопасность данных"
+      - name: "Сетевая безопасность"
+      - name: "Управление ключами и сертификатами"
+        markers: [table]
+      - name: "Аудит"
+        markers: [table]
+      - name: "Правила эксплуатации"
+      - name: "Настройки параметров безопасности"
+      - name: "Чек-лист валидации настройки механизмов безопасности"
+    notes:
+      - id: N-SEC-1
+        scope: cross-doc          # нота, НЕ раздел; отсутствие не считать пропуском
+        text: >
+          Сведения по ключам и сертификатам коррелируют с: Безопасность данных,
+          Сетевая безопасность, Компонентно-логическая диаграмма, Взаимодействия,
+          Диаграммы развертывания.
+
+  pmi:
+    title: "Программа и методика испытаний"
+    aliases: [test-plan]
+    sections:
+      - name: "Объект испытаний и требования"
+        markers: [ref]
+      - name: "Методы испытаний"
+        markers: [ref]
+        children:
+          - name: "Изменение функциональности"
+            flags: [cond, gen]
+          - name: "Исправленные ошибки"
+            flags: [cond, gen]
+          - name: "Регрессионные тесты"
+            markers: [ref]
+    # ВНИМАНИЕ: ребра «Регрессионные тесты ↔ Основные функции» в графе НЕТ — не выдумывать.
+
+  release-notes:
+    title: "Примечания к релизу"
+    sections:
+      - name: "Секция версии продукта"
+        children:
+          - name: "Компонентный состав"
+            markers: [ref]        # ссылка на JSON-шаблон
+            flags: [gen]
+          - name: "Изменение функциональности"
+            flags: [cond, gen]
+          - name: "Исправленные ошибки"
+            flags: [cond, gen]
+          - name: "Устраненные уязвимости"
+            flags: [cond, gen]
+          - name: "Обратная совместимость"
+            markers: [manual]
+            flags: [version_aware]
+          - name: "Известные проблемы"
+            markers: [manual]
+          - name: "Изменения в параметрах установки и настройки"
+            markers: [manual]
+          - name: "Изменения в документации"
+            markers: [manual]
+            flags: [version_aware]
+
+  metadata:
+    title: "Метаданные"
+    aliases: [info]
+    files:                        # только эти два файла; это НЕ разделы
+      - "db-models.json"
+      - "deployment-units.json"
+
+# ============================================================================
+# Спецификация фактов: что worker извлекает для каждой секции-эндпоинта.
+# Ключ facts = каноничное имя раздела из этого файла. digest — нормализованный
+# компактный вид (списки имён/элементов), НЕ полный текст раздела.
+# ============================================================================
+fact_specs:
+  spo_list:        "Список наименований СПО (ПО + версия, если указана), по одному элементу на позицию."
+  component_list:  "Список имён компонентов."
+  scenario_names:  "Список названий сценариев (только заголовки, без содержимого)."
+  item_names:      "Список названий пунктов/подразделов раздела."
+  section_digest:  "Дайджест ≤ 15 строк: ключевые утверждения раздела своими словами."
+  presence:        "true/false — раздел или документ присутствует."
+  version_value:   "Строка версии как есть (например «D-6.0.0»)."
+  file_json_keys:  "Список верхнеуровневых ключей/элементов JSON-файла."
+
+# ============================================================================
+# Рёбра. type → code — фиксированное соответствие, цвет больше не нужен:
+#   spo → CVAL-SPO | logical → CVAL-LOGIC | meta → CVAL-META
+#   include → CVAL-INC-X (cross-doc) / CVAL-INC-IN (intra-doc)
+#   link → CVAL-LINK | dependency → CVAL-DEP | version → CVAL-VER
+# scope: intra-doc (worker) | cross-doc (edge-checker) | doc-existence (orchestrator)
+# symmetric: true — расхождение репортится один раз с обеими сторонами.
+# ============================================================================
+edges:
+
+  # --- Зависимости (наличие документов от компонентного состава) ---
+  - id: E-DEP-1
+    type: dependency
+    code: CVAL-DEP
+    scope: doc-existence
+    trigger: {doc: architecture, section: "Элементы развертывания", fact: presence}
+    requires_doc: agent-guide
+    rule: "Есть элементы развертывания (sidecar/агент) → agent-guide обязателен; иначе опционален."
+  - id: E-DEP-2
+    type: dependency
+    code: CVAL-DEP
+    scope: doc-existence
+    trigger: {doc: architecture, section: "Программные интерфейсы", fact: presence}
+    requires_doc: user-guide
+    rule: "Есть интерфейсы взаимодействия конечного пользователя → user-guide обязателен; иначе опционален."
+  - id: E-DEP-3
+    type: dependency
+    code: CVAL-DEP
+    scope: cross-doc
+    group: GRP-DEP
+    a: {doc: agent-guide, fact: presence}
+    b: {doc: about, section: "Совместимость с выпущенными клиентами", fact: section_digest}
+    rule: "Наличие agent-guide согласуется с разделом совместимости."
+
+  # --- СПО (перечни должны совпадать) ---
+  - id: E-SPO-1
+    type: spo
+    code: CVAL-SPO
+    scope: cross-doc
+    group: GRP-SPO
+    symmetric: true
+    a: {doc: about, section: "Системные требования", fact: spo_list}
+    b: {doc: installation-guide, section: "Чек-лист проверки корректности работы", fact: spo_list}
+  - id: E-SPO-2
+    type: spo
+    code: CVAL-SPO
+    scope: cross-doc
+    group: GRP-SPO
+    symmetric: true
+    a: {doc: about, section: "Системные требования", fact: spo_list}
+    b: {doc: deployment, section: "Вариант развертывания", fact: spo_list}
+  - id: E-SPO-3
+    type: spo
+    code: CVAL-SPO
+    scope: cross-doc
+    group: GRP-SPO
+    symmetric: true
+    a: {doc: about, section: "Системные требования", fact: spo_list}
+    b: {doc: security-guide, section: "Настройки параметров безопасности", fact: spo_list}
+  - id: E-SPO-4
+    type: spo
+    code: CVAL-SPO
+    scope: cross-doc
+    group: GRP-SPO
+    symmetric: true
+    a: {doc: about, section: "Системные требования", fact: spo_list}
+    b: {doc: architecture, section: "Сценарии отказа", fact: spo_list}
+    rule: >
+      Покрытие, не тождество: каждое СПО из «Системные требования» должно быть
+      отражено в сценариях отказа. Расхождение здесь НЕ дублировать кодом
+      CVAL-INC-X по ребру E-INC-4 — одна находка на одно расхождение.
+
+  # --- Включения внутри architecture (проверяет worker) ---
+  - id: E-INC-1
+    type: include
+    code: CVAL-INC-IN
+    scope: intra-doc
+    doc: architecture
+    a: {section: "Программные интерфейсы"}
+    requires: {section: "Компоненты"}
+  - id: E-INC-2
+    type: include
+    code: CVAL-INC-IN
+    scope: intra-doc
+    doc: architecture
+    a: {section: "Сценарии отказа"}
+    requires: {section: "Компоненты"}
+  - id: E-INC-3
+    type: include
+    code: CVAL-INC-IN
+    scope: intra-doc
+    doc: architecture
+    a: {section: "Диаграммы последовательностей"}
+    requires: {section: "Компоненты"}
+
+  # --- Включение кросс-документное ---
+  - id: E-INC-4
+    type: include
+    code: CVAL-INC-X
+    scope: cross-doc
+    group: GRP-SPO
+    a: {doc: architecture, section: "Сценарии отказа", fact: spo_list}
+    b: {doc: about, section: "Необходимое программное обеспечение", fact: spo_list}
+    rule: "См. E-SPO-4: не эмитить дубль, если расхождение уже покрыто CVAL-SPO."
+
+  # --- Ссылка ---
+  - id: E-LINK-1
+    type: link
+    code: CVAL-LINK
+    scope: doc-existence
+    a: {doc: architecture, section: "Диаграммы развертывания"}
+    requires_doc: deployment
+    rule: "Раздел-ссылка должен вести в существующий документ deployment."
+
+  # --- Логические / метаданные ---
+  - id: E-META-1
+    type: meta
+    code: CVAL-META
+    scope: cross-doc
+    group: GRP-DEPLOY
+    a: {doc: deployment, section: "Вариант развертывания", fact: item_names}
+    b: {doc: metadata, file: "deployment-units.json", fact: file_json_keys}
+  - id: E-META-2
+    type: meta
+    code: CVAL-META
+    scope: cross-doc
+    group: GRP-ARCH
+    a: {doc: architecture, section: "Физические модели баз данных", fact: item_names}
+    b: {doc: metadata, file: "db-models.json", fact: file_json_keys}
+  - id: E-LOG-1
+    type: logical
+    code: CVAL-LOGIC
+    scope: cross-doc
+    group: GRP-ARCH
+    symmetric: true
+    a: {doc: architecture, section: "Механизмы безопасности", fact: section_digest}
+    b: {doc: security-guide, fact: presence}
+    rule: "Консистентность с документом РБ в целом."
+  - id: E-LOG-2
+    type: logical
+    code: CVAL-LOGIC
+    scope: cross-doc
+    group: GRP-DEPLOY
+    symmetric: true
+    a: {doc: deployment, section: "Вариант развертывания", fact: item_names}
+    b: {doc: architecture, section: "Элементы развертывания", fact: item_names}
+  - id: E-LOG-3
+    type: logical
+    code: CVAL-LOGIC
+    scope: cross-doc
+    group: GRP-DEPLOY
+    symmetric: true
+    a: {doc: deployment, section: "Вариант развертывания", fact: item_names}
+    b: {doc: architecture, section: "Взаимодействия", fact: item_names}
+  - id: E-LOG-4
+    type: logical
+    code: CVAL-LOGIC
+    scope: cross-doc
+    group: GRP-SCEN
+    symmetric: true
+    a: {doc: about, section: "Варианты и сценарии использования", fact: scenario_names}
+    b: {doc: architecture, section: "Диаграммы последовательностей", fact: scenario_names}
+    rule: "Каждому use case соответствует диаграмма последовательностей."
+  - id: E-LOG-5
+    type: logical
+    code: CVAL-LOGIC
+    scope: cross-doc
+    group: GRP-ARCH
+    symmetric: true
+    a: {doc: about, section: "Нефункциональные особенности", fact: section_digest}
+    b: {doc: architecture, section: "Механизмы безопасности", fact: section_digest}
+  - id: E-LOG-6
+    type: logical
+    code: CVAL-LOGIC
+    scope: cross-doc
+    group: GRP-SCEN
+    symmetric: true
+    a: {doc: administration-guide, section: "Сценарии администрирования", fact: scenario_names}
+    b: {doc: about, section: "Сценарий использования", fact: scenario_names}
+  - id: E-LOG-7
+    type: logical
+    code: CVAL-LOGIC
+    scope: cross-doc
+    group: GRP-SCEN
+    symmetric: true
+    a: {doc: user-guide, section: "Использование приложения", fact: scenario_names}
+    b: {doc: about, section: "Сценарий использования n", fact: scenario_names}
+  - id: E-LOG-8
+    type: logical
+    code: CVAL-LOGIC
+    scope: cross-doc
+    group: GRP-SCEN
+    symmetric: true
+    a: {doc: security-guide, section: "Авторизация", fact: section_digest}
+    b: {doc: administration-guide, section: "Сценарий администрирования", fact: scenario_names}
+  - id: E-LOG-9
+    type: logical
+    code: CVAL-LOGIC
+    scope: cross-doc
+    group: GRP-RN
+    symmetric: true
+    a: {doc: release-notes, section: "Изменение функциональности", fact: item_names}
+    b: {doc: pmi, section: "Изменение функциональности", fact: item_names}
+  - id: E-LOG-10
+    type: logical
+    code: CVAL-LOGIC
+    scope: cross-doc
+    group: GRP-RN
+    symmetric: true
+    a: {doc: release-notes, section: "Исправленные ошибки", fact: item_names}
+    b: {doc: pmi, section: "Исправленные ошибки", fact: item_names}
+  - id: E-LOG-11
+    type: logical
+    code: CVAL-LOGIC
+    scope: cross-doc
+    group: GRP-RN
+    symmetric: true
+    a: {doc: release-notes, section: "Устраненные уязвимости", fact: item_names}
+    b: {doc: pmi, section: "Исправленные ошибки", fact: item_names}
+  - id: E-LOG-12
+    type: logical
+    code: CVAL-LOGIC
+    scope: cross-doc
+    group: GRP-RN
+    symmetric: true
+    a: {doc: installation-guide, section: "Обновление", fact: item_names}
+    b: {doc: release-notes, section: "Изменения в параметрах установки и настройки", fact: item_names}
+  - id: E-LOG-13
+    type: logical
+    code: CVAL-LOGIC
+    scope: cross-doc
+    group: GRP-DEPLOY
+    symmetric: true
+    a: {doc: deployment, fact: presence}
+    b: {doc: security-guide, section: "Настройки параметров безопасности", fact: section_digest}
+
+# ============================================================================
+# Сквозная проверка версий (не ребро). Facts `version` собирают все документы,
+# которые её объявляют. Все значения должны совпадать; расхождение → CVAL-VER.
+# ============================================================================
+version_check:
+  group: GRP-VER
+  code: CVAL-VER
+  collect_from: [installation-guide, administration-guide, release-notes, pmi]
+
+# ============================================================================
+# Группы рёбер → один edge-checker на группу. Оркестратор передаёт чекеру
+# id группы и пути к facts-файлам docs этой группы.
+# ============================================================================
+edge_groups:
+  GRP-SPO:    {edges: [E-SPO-1, E-SPO-2, E-SPO-3, E-SPO-4, E-INC-4, N-INST-1],
+               docs: [about, installation-guide, deployment, security-guide, architecture]}
+  GRP-DEPLOY: {edges: [E-META-1, E-LOG-2, E-LOG-3, E-LOG-13],
+               docs: [deployment, architecture, metadata, security-guide]}
+  GRP-ARCH:   {edges: [E-META-2, E-LOG-1, E-LOG-5, N-SEC-1],
+               docs: [architecture, security-guide, about, metadata, deployment]}
+  GRP-SCEN:   {edges: [E-LOG-4, E-LOG-6, E-LOG-7, E-LOG-8],
+               docs: [about, architecture, administration-guide, user-guide, security-guide]}
+  GRP-RN:     {edges: [E-LOG-9, E-LOG-10, E-LOG-11, E-LOG-12],
+               docs: [release-notes, pmi, installation-guide]}
+  GRP-DEP:    {edges: [E-DEP-3],
+               docs: [agent-guide, about]}
+  GRP-VER:    {edges: [], version_check: true,
+               docs: [installation-guide, administration-guide, release-notes, pmi]}
