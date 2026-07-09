@@ -1,161 +1,102 @@
----
-name: release-notes-generator
-description: |
-  Генерация release notes (релизных заметок) для релиза в виде структурированного markdown-документа на русском языке.
-  
-  ОБЯЗАТЕЛЬНО используй этот скилл когда пользователь:
-  - Просит сформулировать, подготовить, сделать, написать, создать, сгенерировать релиз или release notes
-  - Спрашивает что вошло в релиз, что изменилось в релизе, что нового в версии
-  - Просит релизные заметки, описание релиза, changelog, список изменений
-  - Указывает идентификатор релиза в формате BD.XXX (например BD.298), BSSI X.X.X-XXXX, v1.X.X
-  - Использует слова: релиз, release, release notes, релизные заметки, changelog, версия, version
-  
-  Примеры запросов которые ОБЯЗАТЕЛЬНО триггерят этот скилл:
-  - "Сформулируй релиз для BD.298"
-  - "Сформулируй release notes для BD.298"
-  - "Подготовь релизные заметки для BD.298"
-  - "Сделай релиз BD.298"
-  - "Что вошло в релиз BD.298"
-  - "Опиши изменения в релизе BD.298"
-  - "Generate release notes for BD.298"
-  - "Release notes BD.298"
-  - "Релиз для BSSI 4.8.1-1320"
-  - "Changelog для версии v1.2.0"
-  
-  Скилл выполняет полный workflow: вызывает tools для сбора данных о задачах, 
-  уязвимостях (CVE), и pull requests релиза. Классифицирует их по типам 
-  (устранённые уязвимости, исправленные ошибки, изменение функциональности).
-  Переводит описания на русский язык. Формирует итоговый markdown-документ 
-  по обязательному шаблону с таблицами по разделам.
-  
-  Внутри скилла подробные инструкции с фазами: Phase 1 — сбор данных через tools,
-  Phase 2 — классификация и форматирование. Без выполнения этих фаз результат
-  будет неполным.
+# Document Validator — Error Codes (общий словарь)
 
-allowed-tools: get_unit_list, get_unit_details, get_unit_pull_requests
----
+Единый словарь кодов находок для **обоих** субагентов (`document-validator-worker` и
+`document-validator-orchestrator`). Источник истины по кодам, их смыслу, severity и тексту ответа.
 
-# Release Notes Generator
+**Расположение:** в корне скилла — `document-validator/error-codes.md` (один общий файл).
+Структура: `document-validator/SKILL.md` (orchestrator) и `error-codes.md` — в корне, а worker — в
+`document-validator/worker/SKILL.md`. Поэтому путь к этому файлу: из **orchestrator** — `./error-codes.md`,
+из **worker** — `../error-codes.md`. Файл должен быть доступен обоим субагентам.
 
-## Overview
+## Как использовать
 
-Generates structured release notes for a release by collecting tasks,
-vulnerabilities, and pull request data via tools, classifying tasks
-by type, translating all descriptions to Russian, and formatting
-the result as Markdown.
+1. ИИ нашёл нарушение правила → выбирает **`code`** из таблицы ниже.
+2. Берёт **шаблон `message`** этого кода и подставляет плейсхолдеры из дерева разделов / `facts`.
+3. Ставит **`severity`** из колонки severity (по умолчанию; можно ужесточить/смягчить по правилам Severity & Conditionality в SKILL).
+4. Пишет **`advice`** по общим правилам (императив, одно действие; `null`, если правка неочевидна).
+5. Одна проблема = один issue. Текст находки **не меняет вердикт** — только описывает его.
 
-## When to use
+`code` — всегда из семейства `CVAL-*`. Эмитент: **[W]** пишет worker (внутри одного файла),
+**[O]** пишет orchestrator (между документами). Язык находок — **русский, технические термины и
+идентификаторы на английском**.
 
-- User mentions "release notes", "релизные заметки", or "version notes"
-- User provides a release ID
-- User asks to summarize what changed in a release
+## Словарь кодов
 
-## Workflow
+| Code | Эмит. | Что значит | Severity | Шаблон `message` |
+|---|---|---|---|---|
+| `CVAL-SEC` | [W] | Обязательный раздел отсутствует в документе | ERROR | Отсутствует обязательный раздел «{section}» в `{doc}` ({position}). |
+| `CVAL-SUBSEC` | [W] | Обязательный подраздел отсутствует под своим разделом | ERROR | Отсутствует обязательный подраздел «{subsection}» раздела «{parent}» в `{doc}` ({position}). |
+| `CVAL-NEST` | [W] | Подраздел присутствует, но не под тем родителем | WARNING | Подраздел «{subsection}» расположен не под «{parent}» в `{doc}` ({position}). |
+| `CVAL-NA` | [W] | Раздел законно неприменим — в метаинфо есть `std_exception_reason` | INFO | Раздел «{section}» отмечен неприменимым (`std_exception_reason`) в `{doc}` — отсутствие ожидаемо. |
+| `CVAL-COND` | [W] | Условный/автогенерируемый раздел отсутствует (зависит от СПО/скоупа/генерации) | WARNING | Условный раздел «{section}» отсутствует в `{doc}` — зависит от {reason}, не ошибка. |
+| `CVAL-VER-SEC` | [W] | Раздела не существовало в версии документа | SUGGESTION | Раздел «{section}» отсутствует в `{doc}`; в версии {version} его ещё не было. |
+| `CVAL-UML-IMG` | [W] | Ожидается UML-блок, вместо него изображение | WARNING | В разделе «{section}» (`{doc}`, {position}) ожидается блок-кода UML, присутствует изображение. |
+| `CVAL-INC` | [W] | Цель `include` не найдена в репозитории | ERROR | `include` из «{section}» (`{doc}`) ссылается на `{target}` — целевой файл не найден через `get_single_file`. |
+| `CVAL-REF` | [W] | Внутренняя/внутрирепозиторная ссылка не разрешается | ERROR | Ссылка на `{target}` из «{section}» (`{doc}`, {position}) не разрешается. |
+| `CVAL-INC-IN` | [W] | Внутридокументное включение: раздел не опирается на требуемый раздел | WARNING | Раздел «{section}» (`{doc}`) должен опираться на «{required_section}», но не содержит его. |
+| `CVAL-NOTE` | [W]/[O] | Нарушено требование примечания (note) графа | WARNING | Не выполнено требование примечания графа для «{section}» (`{doc}`): {note}. |
+| `CVAL-SPO` | [O] | Перечень СПО не совпадает между документами (red-ребро) | ERROR | Перечень СПО не совпадает: «{sectionA}» (`{docA}`, {positionA}) ↔ «{sectionB}» (`{docB}`, {positionB}); расхождение: {diff}. |
+| `CVAL-LOGIC` | [O] | Нарушена логическая консистентность контента (blue-ребро) | ERROR | Логическое несоответствие: «{sectionA}» (`{docA}`, {positionA}) ↔ «{sectionB}» (`{docB}`, {positionB}); {diff}. |
+| `CVAL-INC-X` | [O] | Кросс-документное включение отсутствует/расходится (green-ребро) | WARNING | «{sectionA}» (`{docA}`) должен включать содержимое «{sectionB}» (`{docB}`), но включение отсутствует/расходится. |
+| `CVAL-LINK` | [O] | Ссылка ведёт в несуществующий/недоступный документ (orange-ребро) | ERROR | Ссылка «{section}» (`{docA}`) ведёт в `{docB}`, но документ отсутствует/недоступен. |
+| `CVAL-DEP` | [O] | Зависимый документ должен существовать по компонентному составу, но отсутствует (blue dashed) | WARNING | По наличию «{trigger_section}» (`{docA}`) ожидается документ `{required_doc}`, но он отсутствует. |
+| `CVAL-VER` | [O] | Несовпадение версий между документами | ERROR | Несовпадение версий: «{valueA}» (`{docA}`, {sectionA} {positionA}) ≠ «{valueB}» (`{docB}`, {sectionB} {positionB}). |
+| `CVAL-META` | [O] | Раздел не согласован с файлом метаданных (`db-models.json` / `deployment-units.json`) | ERROR | Раздел «{sectionA}» (`{docA}`) не согласован с `{metadata_file}` в `metadata`. |
+| `CVAL-WORKER` | [O] | Воркер не вернул результат по файлу (сбой/таймаут) | WARNING | Воркер не вернул результат по файлу `{docA}`. |
 
-The workflow has two strict phases. Do not produce any output text
-during Phase 1 — only call tools.
+Маппинг код → тип ребра графа: `CVAL-SPO`=СПО (red); `CVAL-LOGIC`/`CVAL-META`/`CVAL-VER`=логическая (blue);
+`CVAL-INC-X`=включение (green, кросс-док); `CVAL-LINK`=ссылка (orange); `CVAL-DEP`=зависимость (blue dashed).
+`CVAL-INC-IN` — включение внутри одного документа (green между разделами одного файла).
 
-### Phase 1: Data collection
+## Плейсхолдеры — подробная инструкция
 
-Execute these steps in order. Do not skip or reorder.
+Каждый плейсхолдер заменяется реальным значением из дерева разделов файла (worker) или из `facts`
+обеих сторон (orchestrator). Если плейсхолдер не применим к коду — он в шаблоне не используется.
 
-**Step 1. Get task list**
+| Плейсхолдер | Что это | Откуда берётся | Оформление | Пример |
+|---|---|---|---|---|
+| `{doc}` | Путь к документу/файлу находки | `file_path` (всегда с префиксом `documentation/`) | в backticks | `documentation/documents/about/index.md` |
+| `{docA}` | Документ-источник ребра (кросс-док) | `facts` стороны A | в backticks | `documentation/documents/architecture/index.md` |
+| `{docB}` | Связанный документ (кросс-док) | `facts` стороны B | в backticks | `documentation/documents/deployment/index.md` |
+| `{section}` | Название раздела (как в графе, по-русски) | дерево разделов / граф | в «ёлочках» | «Откат» |
+| `{sectionA}` / `{sectionB}` | Разделы сторон A/B | `facts` сторон | в «ёлочках» | «Сценарии отказа» |
+| `{subsection}` | Название подраздела | дерево разделов | в «ёлочках» | «Метрики (Table)» |
+| `{parent}` | Родительский раздел подраздела | дерево разделов | в «ёлочках» | «Мониторинг» |
+| `{position}` | Позиция в источнике | заголовок раздела / `facts.position` | `L<n>` или `L<n>-<m>` или «раздел X, L<n>» | `L80`, `L120-140` |
+| `{positionA}` / `{positionB}` | Позиции сторон A/B | `facts` сторон | как `{position}` | `L4` |
+| `{value}` | Конкретное значение | дерево/`facts` | в «ёлочках» если текст | «D-6.0.0» |
+| `{valueA}` / `{valueB}` | Значения сторон A/B (версии, элементы) | `facts` сторон | в «ёлочках» | «6.0.0» |
+| `{target}` | Цель `include`/ссылки (путь/файл) | сам `include`/ссылка | в backticks | `../about/system-requirements.md` |
+| `{required_section}` | Раздел, на который должен опираться (для `CVAL-INC-IN`) | граф (green-ребро внутри файла) | в «ёлочках» | «Компоненты» |
+| `{required_doc}` | Документ, который должен существовать (для `CVAL-DEP`) | граф (blue dashed) | в backticks | `agent-guide` |
+| `{trigger_section}` | Раздел-триггер зависимости (для `CVAL-DEP`) | `facts` architecture | в «ёлочках» | «Элементы развертывания» |
+| `{metadata_file}` | Имя файла метаданных (для `CVAL-META`) | граф/`metadata` | в backticks | `db-models.json` |
+| `{reason}` | Причина условности (для `CVAL-COND`) | правила severity | обычный текст | СПО / скоуп / автогенерация |
+| `{version}` | Версия документа (для `CVAL-VER-SEC`) | `facts.version` | обычный текст | 5.4.0 |
+| `{note}` | Текст требования примечания графа (для `CVAL-NOTE`) | граф (note) | обычный текст | СПО должно быть отражено на Диаграммах развертывания |
+| `{diff}` | Краткое описание расхождения (для `CVAL-SPO`/`CVAL-LOGIC`) | сравнение `facts` | обычный текст | в `about` есть `redis`, в `installation-guide` отсутствует |
 
-Call `get_unit_list` for the release.
+### Правила подстановки и оформления
 
-For each unit, save: `code`, `summary`, `description.content`, `type`, `source`.
+- **Пути и идентификаторы** (`{doc}`, `{docA}`, `{docB}`, `{target}`, `{required_doc}`, `{metadata_file}`),
+  а также JSON-ключи и технические термины — в backticks.
+- **Названия разделов** (`{section}`, `{subsection}`, `{parent}`, `{required_section}`, `{trigger_section}`) — в «ёлочках».
+- `{doc}` и любые пути **всегда** начинаются с `documentation/`, **никогда** с `documentation/documents` без префикса и не локальным абсолютным путём.
+- **`{position}` опционально**: если позиция известна — подставляй (`L80`); если нет — **убери весь хвост `({position})`** из шаблона, не пиши `(null)`/`(None)`.
+- **Значения сериализуются строками** (включая числа), `null` остаётся `null` — общий JSON-инвариант отчёта.
+- Не подставляй в `message` секреты/чувствительные значения и не цитируй большие фрагменты — ссылайся на место.
+- Язык — русский; термины/идентификаторы — английские, как в графе.
 
-From the first record, extract the field `Версия` and save it as `release_id`.
+### `advice`
 
-**Step 2. Get unit details**
+- Императив, одно действие: «Добавить подраздел «Метрики (Table)» в «Мониторинг»», «Привести версию к формату `6.0.0`».
+- Действенно и проверяемо; без общих советов «улучшить документацию».
+- Если правка неочевидна или зависит от продукта — `advice: null`.
 
-For each unit code from Step 1, call `get_unit_details`.
+## Пример заполнения
 
-Extract two related types:
+Код `CVAL-VER`, шаблон:
+> Несовпадение версий: «{valueA}» (`{docA}`, {sectionA} {positionA}) ≠ «{valueB}» (`{docB}`, {sectionB} {positionB}).
 
-- `type="sber_component"` → `value[].name` (as-is) → component code.
-  Example: `"SRGE"`.
-
-- `type="version"` → `value[].name` split into two parts:
-  - Component name: strip trailing version pattern `\d+[\d.]+\d+[\w-]*`.
-    Example: `"Platform V Frontend High Load 4.3.9.6"` → `"Platform V Frontend High Load"`.
-  - Version: extract only the version pattern `\d+[\d.]+\d+[\w-]*`.
-    Example: `"Platform V Frontend High Load 4.3.9.6"` → `"4.3.9.6"`.
-
-Pair each `type="version"` `value[]` with the corresponding `type="sber_component"` `value[].name`
-by their order index. Each row contains: code, component name, version.
-
-**Step 3. Get pull requests**
-
-For each unit code from Step 1, call `get_unit_pull_requests`.
-
-Save: PR descriptions, links, and changes.
-
-**Empty result handling**
-
-If steps 1–3 return no data, output exactly:
-
-> Данные для формирования release notes не найдены.
-
-Then stop. Do not proceed to Phase 2.
-
-### Phase 2: Generate report
-
-Start this phase only after all Phase 1 tool calls are complete.
-
-All output must be in Russian. Technical identifiers (ticket codes,
-component codes, CVE identifiers) remain unchanged.
-
-#### Task classification
-
-Apply rules in priority order. The first match wins.
-
-**Устраненные уязвимости** — only entries with a CVE identifier:
-- `STS` with `type=BUG_КБ`
-- `SBTSUPPORT` where `name` matches `CVE-\d+-\d+`
-
-**Исправленные ошибки**:
-- `TSK` (all)
-- `SBTSUPPORT` where `name` does NOT match `CVE-\d+-\d+`
-- `STS` where `type=Bug` AND `type≠BUG_КБ`
-
-**Изменение функциональности**:
-- `STS` where `type≠Bug`
-- `CRPV` excluding Citadel tasks
-
-**Citadel exclusion** — exclude entirely if `CRPV` `name` matches any of:
-- `Реализовать требование .* стандарта`
-- `Пройти ручную проверку на соответствие требованию .* стандарта`
-- `Реализовать стандарт`
-- `Пройденные требования стандарта`
-- `Пройденные требования по стандарту`
-- `Нарушение стандарта`
-
-#### Output rules
-
-- If a section has no tasks, omit both the header and the table entirely.
-- Use the template from `templates/release-notes.md`.
-
-## Critical requirements
-
-| Requirement | Specification |
-|---|---|
-| Data completeness | Obtain data for all tasks and all pull requests. Skipping is unacceptable. |
-| Russian language | All descriptions and summaries must be translated to Russian. |
-| Format | Output strictly in Markdown with proper headers and tables. |
-| Dynamic structure | No records → omit both header and table. |
-| Step order | Execute Phase 1 steps strictly 1 → 2 → 3. |
-
-## Constraints
-
-1. Do not output descriptions or summaries in English, except codes and identifiers.
-2. Do not add commentary outside the template.
-3. Do not modify column headers.
-4. Do not translate ticket identifiers or component codes.
-5. Omit a section entirely if it has no data. Do not insert "no data" rows.
-6. Do not use H3 (`###`) for main sections. Use H1 (`#`) for the title and H2 (`##`) for sections.
-7. Do not generate any text before all Phase 1 tool calls are complete.
-
-## Example
-
-See `examples/output.md` for a reference of the expected format.
+После подстановки:
+> Несовпадение версий: «D-6.0.0» (`documentation/documents/administration-guide/index.md`, Версия L4) ≠ «6.0.0» (`documentation/documents/release-notes/index.md`, Версия L2).
