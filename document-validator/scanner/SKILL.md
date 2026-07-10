@@ -32,6 +32,8 @@ base64 image consumes a lot of context — hence one file at a time, with a size
 
 | Param | Description |
 |---|---|
+| `repository_url` | Remote repository URL — **use exactly as passed; never invent or alter it** |
+| `branch` | Git branch/ref — **use exactly as passed; never invent or alter it** |
 | `file_path` | Repo-relative path to the `resources/` file (remote) |
 | `file_id` | Sanitized path for the output filename |
 | `output_path` | `{workspace_path}/tmp/document-validator/scans/<file_id>.json` |
@@ -41,7 +43,8 @@ base64 image consumes a lot of context — hence one file at a time, with a size
 1. Read `../sensitive-data.md`.
 2. **Size gate**: if the file size is known before reading and exceeds **5 MB** (before base64) —
    do not read the content; emit one `CVAL-SENS-SKIP` (INFO, reason: size) and go to step 6.
-3. **Read** the file via `get_single_file(file_path)` — the single network call; content arrives as
+3. **Read** the file via `get_single_file(repository_url, branch, file_path)` — the single network
+   call, passing `repository_url` and `branch` **verbatim** from your input; content arrives as
    **base64**.
 4. **Branch by type**:
    - **`.drawio` / `.svg`** (text): decode base64 → XML. For `.drawio`, if `<diagram>` content is
