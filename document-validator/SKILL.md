@@ -80,16 +80,26 @@ with `/` → `__` (e.g. `developer-guide__index.md`, `architecture__resources__s
 
 ### Phase 1: Wave 1 — workers + scanners (single parallel batch)
 
-Emit, in ONE turn, a spawn call for every doc file AND every scan target:
+Emit, in ONE turn, a spawn call for every doc file AND every scan target. The task text you pass to
+each subagent **MUST begin with exactly this line** (arguments travel inside the task text — there is
+no separate parameter channel):
 
-- **worker** per doc file, passing: `repository_url` and `branch` (verbatim, the same values you
-  used in Phase 0 — do not let subagents guess them), `file_path`, `doc_type` (inferred from folder,
-  may be re-inferred), `file_id`, `output_path` = `.../files/<file_id>.json`, `manifest_path`.
-- **scanner** per scan target, passing: `repository_url`, `branch` (verbatim), `file_path`,
-  `file_id`, `output_path` = `.../scans/<file_id>.json`.
+```
+REPO: <repository_url> BRANCH: <branch> FILE: <file_path>
+```
 
-The `repository_url` and `branch` are the single source both subagents rely on for repository access;
-they must originate from you and be passed on every spawn. Do not let a subagent construct its own URL.
+Use the workflow's `repository_url` and `branch` **verbatim** (the same values from Phase 0); never
+omit this line and never let the subagent guess these values. After that first line, add the rest:
+
+- **worker**: `output_path` = `.../files/<file_id>.json`, `manifest_path`, `doc_type` hint.
+  Example task text:
+  `REPO: https://portal.works.prod.sbt/... BRANCH: release/D-5.4.2 FILE: documentation/documents/about/index.md`
+  then `output_path: .../files/about__index.md.json manifest_path: .../manifest.json doc_type: about`.
+- **scanner**: `output_path` = `.../scans/<file_id>.json`. Same mandatory first line with the
+  resources file as `FILE:`.
+
+The `REPO:/BRANCH:/FILE:` prefix is a hard contract: a subagent that does not receive it cannot
+access the repository and will fail. Build the line for every spawn without exception.
 
 Workers and scanners are independent — they belong in the same wave. Do not wait between spawns.
 
