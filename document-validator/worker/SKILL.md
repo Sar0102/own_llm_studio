@@ -38,19 +38,27 @@ cross-document consistency and does **not** read binary attachments — instead 
 
 ## Input (from orchestrator)
 
+Arguments arrive **inside the task text**, not as separate fields. The task text you receive
+**always begins with exactly this line**:
+
+```
+REPO: <repository_url> BRANCH: <branch> FILE: <file_path>
+```
+
+**First action: parse these three values from that line** and use them verbatim — `repository_url`
+and `branch` go into `get_single_file`, `file_path` is the single `.md` file you validate. Never
+invent, guess, alter, or derive them from file content or memory. If that line is absent or any of
+the three is missing, do not fabricate a value — write the output with a single `CVAL-WORKER` issue
+stating the task text was incomplete, then stop.
+
+The rest of the task text carries:
+
 | Param | Description |
 |---|---|
-| `repository_url` | Remote repository URL — **use exactly as passed; never invent, guess, or alter it** |
-| `branch` | Git branch/ref — **use exactly as passed; never invent or alter it** |
-| `file_path` | Repo-relative path to the single `.md` file — **remote repo, NOT a local path** |
-| `doc_type` | Optional hint; if absent, infer it (folder / filename / front-matter; see `documents` keys and `aliases` in graph.yaml) |
-| `file_id` | Sanitized relative path used for the output filename |
-| `output_path` | `{workspace_path}/tmp/document-validator/files/<file_id>.json` |
+| `output_path` | `{workspace_path}/tmp/document-validator/files/<file_id>.json` — where you write your result |
 | `manifest_path` | Path to `manifest.json` — the list of every repo-relative file path under `documentation/` |
-
-The `repository_url` and `branch` are **provided inputs, not something you construct**. Pass them
-verbatim into every repository tool call. If either is missing from your input, do not fabricate a
-value — write the output with a single `CVAL-WORKER` issue stating the input was incomplete, and stop.
+| `doc_type` | Optional hint; if absent, infer it (folder / filename / front-matter; see `documents` keys and `aliases` in graph.yaml) |
+| `file_id` | Sanitized relative path used for the output filename (may be derived from `FILE:` if not given) |
 
 ## Tools
 
