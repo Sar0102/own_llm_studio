@@ -61,11 +61,17 @@ with `/` → `__` (e.g. `developer-guide__index.md`, `architecture__resources__s
 
 ### Phase 0: Discovery & Manifest
 
-1. Use the remote repository integration (source-control tool) for the provided URL — **do not clone locally**.
-2. Enumerate the **full file tree** under `documentation/` via one repository listing call (no file
-   contents). If `documentation/documents` does not exist — stop and report no documents folder.
+0. Read `repository_url` and `branch` from the workflow input. These are the canonical repository
+   coordinates for the whole run — **capture them once and pass them, verbatim, to every subagent you
+   spawn.** Never let a subagent construct or guess a URL/branch, and never alter them yourself.
+1. Use the remote repository integration (source-control tool) for that `repository_url`/`branch` —
+   **do not clone locally**.
+2. Enumerate the **full file tree** under `documentation/` via **one** repository listing call (no
+   file contents; use the recursive listing from the root — do not fan out per-directory listings).
+   If `documentation/documents` does not exist — stop and report no documents folder.
 3. Write **`manifest.json`**: a flat JSON array of every repo-relative file path under
-   `documentation/`. The manifest is the single existence-check source for all subagents.
+   `documentation/`. The manifest is the single existence-check source for all subagents — after it
+   is written, no further listing calls are made anywhere in the run.
 4. From the manifest derive two work lists:
    - **doc files**: every `.md` under `documentation/documents` → one worker each.
    - **scan targets**: every file under any `resources/` folder (`**/resources/*`) with extensions
@@ -76,9 +82,14 @@ with `/` → `__` (e.g. `developer-guide__index.md`, `architecture__resources__s
 
 Emit, in ONE turn, a spawn call for every doc file AND every scan target:
 
-- **worker** per doc file, passing: `file_path`, `doc_type` (inferred from folder, may be re-inferred),
-  `file_id`, `output_path` = `.../files/<file_id>.json`, `manifest_path`.
-- **scanner** per scan target, passing: `file_path`, `file_id`, `output_path` = `.../scans/<file_id>.json`.
+- **worker** per doc file, passing: `repository_url` and `branch` (verbatim, the same values you
+  used in Phase 0 — do not let subagents guess them), `file_path`, `doc_type` (inferred from folder,
+  may be re-inferred), `file_id`, `output_path` = `.../files/<file_id>.json`, `manifest_path`.
+- **scanner** per scan target, passing: `repository_url`, `branch` (verbatim), `file_path`,
+  `file_id`, `output_path` = `.../scans/<file_id>.json`.
+
+The `repository_url` and `branch` are the single source both subagents rely on for repository access;
+they must originate from you and be passed on every spawn. Do not let a subagent construct its own URL.
 
 Workers and scanners are independent — they belong in the same wave. Do not wait between spawns.
 
