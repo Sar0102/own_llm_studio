@@ -30,13 +30,22 @@ base64 image consumes a lot of context — hence one file at a time, with a size
 
 ## Input (from orchestrator)
 
+Arguments arrive **inside the task text**, not as separate fields. The task text you receive
+**always begins with exactly this line**:
+
+```
+REPO: <repository_url> BRANCH: <branch> FILE: <file_path>
+```
+
+**First action: parse these three values** and use them verbatim — `repository_url`/`branch` go into
+`get_single_file`, `file_path` is the single `resources/` file you scan. Never invent or alter them.
+If the line is absent, write the output with a single `CVAL-SENS-SKIP` (INFO, reason: task text
+incomplete) and stop. The rest of the task text carries:
+
 | Param | Description |
 |---|---|
-| `repository_url` | Remote repository URL — **use exactly as passed; never invent or alter it** |
-| `branch` | Git branch/ref — **use exactly as passed; never invent or alter it** |
-| `file_path` | Repo-relative path to the `resources/` file (remote) |
-| `file_id` | Sanitized path for the output filename |
 | `output_path` | `{workspace_path}/tmp/document-validator/scans/<file_id>.json` |
+| `file_id` | Sanitized path for the output filename (may be derived from `FILE:`) |
 
 ## Workflow
 
