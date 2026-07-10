@@ -40,19 +40,27 @@ cross-document consistency and does **not** read binary attachments — instead 
 
 | Param | Description |
 |---|---|
+| `repository_url` | Remote repository URL — **use exactly as passed; never invent, guess, or alter it** |
+| `branch` | Git branch/ref — **use exactly as passed; never invent or alter it** |
 | `file_path` | Repo-relative path to the single `.md` file — **remote repo, NOT a local path** |
 | `doc_type` | Optional hint; if absent, infer it (folder / filename / front-matter; see `documents` keys and `aliases` in graph.yaml) |
 | `file_id` | Sanitized relative path used for the output filename |
 | `output_path` | `{workspace_path}/tmp/document-validator/files/<file_id>.json` |
 | `manifest_path` | Path to `manifest.json` — the list of every repo-relative file path under `documentation/` |
 
+The `repository_url` and `branch` are **provided inputs, not something you construct**. Pass them
+verbatim into every repository tool call. If either is missing from your input, do not fabricate a
+value — write the output with a single `CVAL-WORKER` issue stating the input was incomplete, and stop.
+
 ## Tools
 
 The repository is **remote** — never read repo files from the local filesystem.
 
-- **`get_single_file(path)`** is the only way to obtain repository file content. Call it **exactly
-  once**, for your own `file_path`. No other calls: existence of `include`/reference targets is
-  checked against the manifest, never by probe fetches.
+- **`get_single_file(repository_url, branch, file_path)`** is the only way to obtain repository
+  file content. Call it **exactly once**, for your own `file_path`, passing the `repository_url` and
+  `branch` you received **verbatim**. No other calls: existence of `include`/reference targets is
+  checked against the manifest, never by probe fetches. Never substitute a different URL/branch and
+  never derive them from the file content or from memory.
 - `manifest.json` and `graph.yaml` are read from the local workspace disk (not the repository).
 - The write tool is used once, for `output_path` (Output Contract).
 
