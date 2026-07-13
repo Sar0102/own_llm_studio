@@ -21,6 +21,18 @@ file, not in the reply. Report the category and describe the location in words o
 Scans **one** file from a `resources/` folder for sensitive information. One scanner = one file (a
 base64 image consumes a lot of context — hence one file at a time, with a size cap).
 
+## Tools — two separate families, never mix them
+
+**Repository tools (remote git):** `get_single_file(repository_url, branch, file_path)` — the only
+way to fetch the `resources/` file you scan. Pass `repository_url`/`branch` from the task line
+verbatim. Never give a repository tool a local path or a `file:///...` URL (`Unsupported URL format`).
+
+**Local workspace tools (disk):** `ls`, `read_file`, `write_file`, `glob` take **absolute** paths
+starting with `/`. Use them for `<skill_dir>/sensitive-data.md`, `<skill_dir>/error-codes.md`, and
+`output_path`.
+
+There is no shell tool: never write or run scripts.
+
 ## Canonical sources
 
 The task text gives you `skill_dir` — an **absolute** path to the skill root. Read the skill files
