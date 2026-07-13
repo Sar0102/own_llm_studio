@@ -1,6 +1,6 @@
 # Document Validator — канонический граф (ЕДИНСТВЕННЫЙ источник истины)
 # ============================================================================
-# Этот файл заменяет PlantUML-диаграмму. Читают ВСЕ субагенты:
+# Читают ВСЕ субагенты:
 #   worker        → documents.<doc_type>.sections / files / notes(scope: intra-doc)
 #                   + edges со scope: intra-doc
 #   edge-checker  → edge_groups и edges со scope: cross-doc (свою группу)
@@ -311,15 +311,17 @@ edges:
     scope: doc-existence
     trigger: {doc: architecture, section: "Программные интерфейсы", fact: presence}
     requires_doc: user-guide
-    rule: "Есть интерфейсы взаимодействия конечного пользователя → user-guide обязателен; иначе опционален."
-  - id: E-DEP-3
+    rule: "Есть интерфейсы взаимодействия конечного пользователя (веб-консоль, приложение, утилита командной строки) → user-guide обязателен; иначе опционален."
+  - id: E-DEP-4
     type: dependency
     code: CVAL-DEP
-    scope: cross-doc
-    group: GRP-DEP
-    a: {doc: agent-guide, fact: presence}
-    b: {doc: about, section: "Совместимость с выпущенными клиентами", fact: section_digest}
-    rule: "Наличие agent-guide согласуется с разделом совместимости."
+    scope: doc-existence
+    trigger: {doc: architecture, section: "Компоненты", fact: presence}
+    requires_doc: developer-guide
+    rule: >
+      При наличии у продукта библиотеки (клиентский модуль, фреймворк) → developer-guide
+      обязателен; иначе опционален. Признак библиотеки — наличие `lib.json` в папке
+      developer-guide либо компонент-библиотека в «Компоненты». Если признака нет — не ERROR.
 
   # --- СПО (перечни должны совпадать) ---
   - id: E-SPO-1
@@ -328,7 +330,7 @@ edges:
     scope: cross-doc
     group: GRP-SPO
     symmetric: true
-    a: {doc: about, section: "Системные требования", fact: spo_list}
+    a: {doc: about, section: "Необходимое программное обеспечение", fact: spo_list}
     b: {doc: installation-guide, section: "Чек-лист проверки корректности работы", fact: spo_list}
   - id: E-SPO-2
     type: spo
@@ -336,7 +338,7 @@ edges:
     scope: cross-doc
     group: GRP-SPO
     symmetric: true
-    a: {doc: about, section: "Системные требования", fact: spo_list}
+    a: {doc: about, section: "Необходимое программное обеспечение", fact: spo_list}
     b: {doc: deployment, section: "Вариант развертывания", fact: spo_list}
   - id: E-SPO-3
     type: spo
@@ -344,7 +346,7 @@ edges:
     scope: cross-doc
     group: GRP-SPO
     symmetric: true
-    a: {doc: about, section: "Системные требования", fact: spo_list}
+    a: {doc: about, section: "Необходимое программное обеспечение", fact: spo_list}
     b: {doc: security-guide, section: "Настройки параметров безопасности", fact: spo_list}
   - id: E-SPO-4
     type: spo
@@ -352,7 +354,7 @@ edges:
     scope: cross-doc
     group: GRP-SPO
     symmetric: true
-    a: {doc: about, section: "Системные требования", fact: spo_list}
+    a: {doc: about, section: "Необходимое программное обеспечение", fact: spo_list}
     b: {doc: architecture, section: "Сценарии отказа", fact: spo_list}
     rule: >
       Покрытие, не тождество: каждое СПО из «Системные требования» должно быть
@@ -512,7 +514,7 @@ edges:
     scope: cross-doc
     group: GRP-RN
     symmetric: true
-    a: {doc: installation-guide, section: "Обновление", fact: item_names}
+    a: {doc: installation-guide, section: "Изменения в параметрах настройки", fact: item_names}
     b: {doc: release-notes, section: "Изменения в параметрах установки и настройки", fact: item_names}
   - id: E-LOG-13
     type: logical
@@ -547,7 +549,5 @@ edge_groups:
                docs: [about, architecture, administration-guide, user-guide, security-guide]}
   GRP-RN:     {edges: [E-LOG-9, E-LOG-10, E-LOG-11, E-LOG-12],
                docs: [release-notes, pmi, installation-guide]}
-  GRP-DEP:    {edges: [E-DEP-3],
-               docs: [agent-guide, about]}
   GRP-VER:    {edges: [], version_check: true,
                docs: [installation-guide, administration-guide, release-notes, pmi]}

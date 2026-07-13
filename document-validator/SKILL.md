@@ -146,7 +146,7 @@ Handle `graph.yaml` edges with `scope: doc-existence` — these need only the ma
 Edge-checkers do **not** touch the repository — they read facts files from disk. So their task text
 does **not** use the `REPO:/BRANCH:/FILE:` line; instead each task description carries the paths they
 need. Emit, in ONE turn, a spawn call for every group in `graph.yaml → edge_groups` (GRP-SPO,
-GRP-DEPLOY, GRP-ARCH, GRP-SCEN, GRP-RN, GRP-DEP, GRP-VER). For each `document-validator-edge-checker`
+GRP-DEPLOY, GRP-ARCH, GRP-SCEN, GRP-RN, GRP-VER). For each `document-validator-edge-checker`
 put in the task description:
 
 - `group_id`.
