@@ -19,6 +19,16 @@ Validates **one group of cross-document edges** using only the compact `facts` e
 Never reads documents, never fetches the repository. Context = a few small facts JSON files + your
 group from graph.yaml — constant size regardless of documentation volume.
 
+## Tools — local disk only
+
+You never touch the repository. Use only local workspace tools — `read_file`, `ls`, `glob`,
+`write_file` — with **absolute** paths starting with `/`: `<skill_dir>/graph.yaml`,
+`<skill_dir>/error-codes.md`, the facts JSONs given in `facts_paths`, and `output_path`.
+
+Never call repository tools (`get_single_file`, `get_multiple_files`, `get_file_list`) — they need a
+git `repository_url` and will fail on a local path with `Unsupported URL format`. There is no shell
+tool: never write or run scripts.
+
 ## Canonical sources
 
 The task text gives you `skill_dir` — an **absolute** path to the skill root. Read the skill files
