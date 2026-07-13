@@ -23,10 +23,14 @@ base64 image consumes a lot of context — hence one file at a time, with a size
 
 ## Canonical sources
 
-- **`../sensitive-data.md`** — the category dictionary (SD-01…SD-11): signals, applicability
+The task text gives you `skill_dir` — an **absolute** path to the skill root. Read the skill files
+directly from there; all filesystem tools require absolute paths starting with `/`. **Never search
+the filesystem for them** — hunting burns the execution timeout and the run is cancelled.
+
+- **`<skill_dir>/sensitive-data.md`** — the category dictionary (SD-01…SD-11): signals, applicability
   (drawio/image), severity, replacements. **Read it first**; scan strictly by it, do not invent
   categories.
-- **`../error-codes.md`** — `CVAL-SENS` / `CVAL-SENS-SKIP` templates and placeholder rules.
+- **`<skill_dir>/error-codes.md`** — `CVAL-SENS` / `CVAL-SENS-SKIP` templates and placeholder rules.
 
 ## Input (from orchestrator)
 
@@ -44,12 +48,13 @@ incomplete) and stop. The rest of the task text carries:
 
 | Param | Description |
 |---|---|
-| `output_path` | `{workspace_path}/tmp/document-validator/scans/<file_id>.json` |
+| `skill_dir` | **Absolute** path to the skill root (read `<skill_dir>/sensitive-data.md`, `<skill_dir>/error-codes.md` from there) |
+| `output_path` | Absolute path where you write your result JSON |
 | `file_id` | Sanitized path for the output filename (may be derived from `FILE:`) |
 
 ## Workflow
 
-1. Read `../sensitive-data.md`.
+1. Read `<skill_dir>/sensitive-data.md`.
 2. **Size gate**: if the file size is known before reading and exceeds **5 MB** (before base64) —
    do not read the content; emit one `CVAL-SENS-SKIP` (INFO, reason: size) and go to step 6.
 3. **Read** the file via `get_single_file(repository_url, branch, file_path)` — the single network
@@ -98,7 +103,7 @@ Issue fields and severity levels are as in the worker skill; `position` for imag
 ## Rules
 
 1. One scanner = one file; one `get_single_file` call; 5 MB cap.
-2. Scan only by `../sensitive-data.md` categories; honor category exclusions (SD-08: "not in proper
+2. Scan only by `<skill_dir>/sensitive-data.md` categories; honor category exclusions (SD-08: "not in proper
    names" — apply literally, do not flag product names).
 3. Never quote found values — category + location in words.
 4. `advice` — imperative, one action, without reproducing the value; else `null`.
