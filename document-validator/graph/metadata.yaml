@@ -1,0 +1,14 @@
+# Document Validator — секция графа для doc_type: metadata
+# Читает ТОЛЬКО worker этого документа. Рёбра между документами — в graph/edges.yaml
+
+doc_type: metadata
+title: Метаданные
+aliases:
+- info
+files:
+- db-models.json
+- deployment-units.json
+facts_to_extract:
+  __doc__:
+    fact: file_json_keys
+    spec: Список верхнеуровневых ключей/элементов JSON-файла.

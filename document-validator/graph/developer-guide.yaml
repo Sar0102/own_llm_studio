@@ -1,0 +1,21 @@
+# Document Validator — секция графа для doc_type: developer-guide
+# Читает ТОЛЬКО worker этого документа. Рёбра между документами — в graph/edges.yaml
+
+doc_type: developer-guide
+title: Руководство прикладного разработчика
+conditional_doc: true
+files:
+- lib.json
+sections:
+- name: Общие сведения
+  markers:
+  - ref
+- name: Подключение и конфигурирование
+- name: Миграция на текущую версию
+- name: Быстрый старт
+  markers:
+  - link
+- name: Использование
+  children:
+  - name: Сценарий использования
+- name: Часто встречающиеся проблемы и пути их устранения

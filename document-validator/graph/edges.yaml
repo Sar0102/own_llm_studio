@@ -1,0 +1,444 @@
+# Document Validator — рёбра консистентности между документами.
+# Читают: orchestrator (scope: doc-existence + edge_groups) и edge-checker (своя группа).
+# Деревья разделов документов — в graph/<doc_type>.yaml
+
+fact_specs:
+  spo_list: Список наименований СПО (ПО + версия, если указана), по одному элементу на позицию.
+  component_list: Список имён компонентов.
+  scenario_names: Список названий сценариев (только заголовки, без содержимого).
+  item_names: Список названий пунктов/подразделов раздела.
+  section_digest: 'Дайджест ≤ 15 строк: ключевые утверждения раздела своими словами.'
+  presence: true/false — раздел или документ присутствует.
+  version_value: Строка версии как есть (например «D-6.0.0»).
+  file_json_keys: Список верхнеуровневых ключей/элементов JSON-файла.
+edges:
+- id: E-DEP-1
+  type: dependency
+  code: CVAL-DEP
+  scope: doc-existence
+  trigger:
+    doc: architecture
+    section: Элементы развертывания
+    fact: presence
+  requires_doc: agent-guide
+  rule: Есть элементы развертывания (sidecar/агент) → agent-guide обязателен; иначе опционален.
+- id: E-DEP-2
+  type: dependency
+  code: CVAL-DEP
+  scope: doc-existence
+  trigger:
+    doc: architecture
+    section: Программные интерфейсы
+    fact: presence
+  requires_doc: user-guide
+  rule: Есть интерфейсы взаимодействия конечного пользователя (веб-консоль, приложение, утилита командной
+    строки) → user-guide обязателен; иначе опционален.
+- id: E-DEP-4
+  type: dependency
+  code: CVAL-DEP
+  scope: doc-existence
+  trigger:
+    doc: architecture
+    section: Компоненты
+    fact: presence
+  requires_doc: developer-guide
+  rule: 'При наличии у продукта библиотеки (клиентский модуль, фреймворк) → developer-guide обязателен;
+    иначе опционален. Признак библиотеки — наличие `lib.json` в папке developer-guide либо компонент-библиотека
+    в «Компоненты». Если признака нет — не ERROR.
+
+    '
+- id: E-SPO-1
+  type: spo
+  code: CVAL-SPO
+  scope: cross-doc
+  group: GRP-SPO
+  symmetric: true
+  a:
+    doc: about
+    section: Необходимое программное обеспечение
+    fact: spo_list
+  b:
+    doc: installation-guide
+    section: Чек-лист проверки корректности работы
+    fact: spo_list
+- id: E-SPO-2
+  type: spo
+  code: CVAL-SPO
+  scope: cross-doc
+  group: GRP-SPO
+  symmetric: true
+  a:
+    doc: about
+    section: Необходимое программное обеспечение
+    fact: spo_list
+  b:
+    doc: deployment
+    section: Вариант развертывания
+    fact: spo_list
+- id: E-SPO-3
+  type: spo
+  code: CVAL-SPO
+  scope: cross-doc
+  group: GRP-SPO
+  symmetric: true
+  a:
+    doc: about
+    section: Необходимое программное обеспечение
+    fact: spo_list
+  b:
+    doc: security-guide
+    section: Настройки параметров безопасности
+    fact: spo_list
+- id: E-SPO-4
+  type: spo
+  code: CVAL-SPO
+  scope: cross-doc
+  group: GRP-SPO
+  symmetric: true
+  a:
+    doc: about
+    section: Необходимое программное обеспечение
+    fact: spo_list
+  b:
+    doc: architecture
+    section: Сценарии отказа
+    fact: spo_list
+  rule: 'Покрытие, не тождество: каждое СПО из «Системные требования» должно быть отражено в сценариях
+    отказа. Расхождение здесь НЕ дублировать кодом CVAL-INC-X по ребру E-INC-4 — одна находка на одно
+    расхождение.
+
+    '
+- id: E-INC-1
+  type: include
+  code: CVAL-INC-IN
+  scope: intra-doc
+  doc: architecture
+  a:
+    section: Программные интерфейсы
+  requires:
+    section: Компоненты
+- id: E-INC-2
+  type: include
+  code: CVAL-INC-IN
+  scope: intra-doc
+  doc: architecture
+  a:
+    section: Сценарии отказа
+  requires:
+    section: Компоненты
+- id: E-INC-3
+  type: include
+  code: CVAL-INC-IN
+  scope: intra-doc
+  doc: architecture
+  a:
+    section: Диаграммы последовательностей
+  requires:
+    section: Компоненты
+- id: E-INC-4
+  type: include
+  code: CVAL-INC-X
+  scope: cross-doc
+  group: GRP-SPO
+  a:
+    doc: architecture
+    section: Сценарии отказа
+    fact: spo_list
+  b:
+    doc: about
+    section: Необходимое программное обеспечение
+    fact: spo_list
+  rule: 'См. E-SPO-4: не эмитить дубль, если расхождение уже покрыто CVAL-SPO.'
+- id: E-LINK-1
+  type: link
+  code: CVAL-LINK
+  scope: doc-existence
+  a:
+    doc: architecture
+    section: Диаграммы развертывания
+  requires_doc: deployment
+  rule: Раздел-ссылка должен вести в существующий документ deployment.
+- id: E-META-1
+  type: meta
+  code: CVAL-META
+  scope: cross-doc
+  group: GRP-DEPLOY
+  a:
+    doc: deployment
+    section: Вариант развертывания
+    fact: item_names
+  b:
+    doc: metadata
+    file: deployment-units.json
+    fact: file_json_keys
+- id: E-META-2
+  type: meta
+  code: CVAL-META
+  scope: cross-doc
+  group: GRP-ARCH
+  a:
+    doc: architecture
+    section: Физические модели баз данных
+    fact: item_names
+  b:
+    doc: metadata
+    file: db-models.json
+    fact: file_json_keys
+- id: E-LOG-1
+  type: logical
+  code: CVAL-LOGIC
+  scope: cross-doc
+  group: GRP-ARCH
+  symmetric: true
+  a:
+    doc: architecture
+    section: Механизмы безопасности
+    fact: section_digest
+  b:
+    doc: security-guide
+    fact: presence
+  rule: Консистентность с документом РБ в целом.
+- id: E-LOG-2
+  type: logical
+  code: CVAL-LOGIC
+  scope: cross-doc
+  group: GRP-DEPLOY
+  symmetric: true
+  a:
+    doc: deployment
+    section: Вариант развертывания
+    fact: item_names
+  b:
+    doc: architecture
+    section: Элементы развертывания
+    fact: item_names
+- id: E-LOG-3
+  type: logical
+  code: CVAL-LOGIC
+  scope: cross-doc
+  group: GRP-DEPLOY
+  symmetric: true
+  a:
+    doc: deployment
+    section: Вариант развертывания
+    fact: item_names
+  b:
+    doc: architecture
+    section: Взаимодействия
+    fact: item_names
+- id: E-LOG-4
+  type: logical
+  code: CVAL-LOGIC
+  scope: cross-doc
+  group: GRP-SCEN
+  symmetric: true
+  a:
+    doc: about
+    section: Варианты и сценарии использования
+    fact: scenario_names
+  b:
+    doc: architecture
+    section: Диаграммы последовательностей
+    fact: scenario_names
+  rule: Каждому use case соответствует диаграмма последовательностей.
+- id: E-LOG-5
+  type: logical
+  code: CVAL-LOGIC
+  scope: cross-doc
+  group: GRP-ARCH
+  symmetric: true
+  a:
+    doc: about
+    section: Нефункциональные особенности
+    fact: section_digest
+  b:
+    doc: architecture
+    section: Механизмы безопасности
+    fact: section_digest
+- id: E-LOG-6
+  type: logical
+  code: CVAL-LOGIC
+  scope: cross-doc
+  group: GRP-SCEN
+  symmetric: true
+  a:
+    doc: administration-guide
+    section: Сценарии администрирования
+    fact: scenario_names
+  b:
+    doc: about
+    section: Сценарий использования
+    fact: scenario_names
+- id: E-LOG-7
+  type: logical
+  code: CVAL-LOGIC
+  scope: cross-doc
+  group: GRP-SCEN
+  symmetric: true
+  a:
+    doc: user-guide
+    section: Использование приложения
+    fact: scenario_names
+  b:
+    doc: about
+    section: Сценарий использования n
+    fact: scenario_names
+- id: E-LOG-8
+  type: logical
+  code: CVAL-LOGIC
+  scope: cross-doc
+  group: GRP-SCEN
+  symmetric: true
+  a:
+    doc: security-guide
+    section: Авторизация
+    fact: section_digest
+  b:
+    doc: administration-guide
+    section: Сценарий администрирования
+    fact: scenario_names
+- id: E-LOG-9
+  type: logical
+  code: CVAL-LOGIC
+  scope: cross-doc
+  group: GRP-RN
+  symmetric: true
+  a:
+    doc: release-notes
+    section: Изменение функциональности
+    fact: item_names
+  b:
+    doc: pmi
+    section: Изменение функциональности
+    fact: item_names
+- id: E-LOG-10
+  type: logical
+  code: CVAL-LOGIC
+  scope: cross-doc
+  group: GRP-RN
+  symmetric: true
+  a:
+    doc: release-notes
+    section: Исправленные ошибки
+    fact: item_names
+  b:
+    doc: pmi
+    section: Исправленные ошибки
+    fact: item_names
+- id: E-LOG-11
+  type: logical
+  code: CVAL-LOGIC
+  scope: cross-doc
+  group: GRP-RN
+  symmetric: true
+  a:
+    doc: release-notes
+    section: Устраненные уязвимости
+    fact: item_names
+  b:
+    doc: pmi
+    section: Исправленные ошибки
+    fact: item_names
+- id: E-LOG-12
+  type: logical
+  code: CVAL-LOGIC
+  scope: cross-doc
+  group: GRP-RN
+  symmetric: true
+  a:
+    doc: installation-guide
+    section: Изменения в параметрах настройки
+    fact: item_names
+  b:
+    doc: release-notes
+    section: Изменения в параметрах установки и настройки
+    fact: item_names
+- id: E-LOG-13
+  type: logical
+  code: CVAL-LOGIC
+  scope: cross-doc
+  group: GRP-DEPLOY
+  symmetric: true
+  a:
+    doc: deployment
+    fact: presence
+  b:
+    doc: security-guide
+    section: Настройки параметров безопасности
+    fact: section_digest
+version_check:
+  group: GRP-VER
+  code: CVAL-VER
+  collect_from:
+  - installation-guide
+  - administration-guide
+  - release-notes
+  - pmi
+edge_groups:
+  GRP-SPO:
+    edges:
+    - E-SPO-1
+    - E-SPO-2
+    - E-SPO-3
+    - E-SPO-4
+    - E-INC-4
+    - N-INST-1
+    docs:
+    - about
+    - installation-guide
+    - deployment
+    - security-guide
+    - architecture
+  GRP-DEPLOY:
+    edges:
+    - E-META-1
+    - E-LOG-2
+    - E-LOG-3
+    - E-LOG-13
+    docs:
+    - deployment
+    - architecture
+    - metadata
+    - security-guide
+  GRP-ARCH:
+    edges:
+    - E-META-2
+    - E-LOG-1
+    - E-LOG-5
+    - N-SEC-1
+    docs:
+    - architecture
+    - security-guide
+    - about
+    - metadata
+    - deployment
+  GRP-SCEN:
+    edges:
+    - E-LOG-4
+    - E-LOG-6
+    - E-LOG-7
+    - E-LOG-8
+    docs:
+    - about
+    - architecture
+    - administration-guide
+    - user-guide
+    - security-guide
+  GRP-RN:
+    edges:
+    - E-LOG-9
+    - E-LOG-10
+    - E-LOG-11
+    - E-LOG-12
+    docs:
+    - release-notes
+    - pmi
+    - installation-guide
+  GRP-VER:
+    edges: []
+    version_check: true
+    docs:
+    - installation-guide
+    - administration-guide
+    - release-notes
+    - pmi

@@ -1,6 +1,6 @@
 ---
 name: document-validator-orchestrator
-description: Orchestrator for parallel documentation validation. Discovers every markdown file under documentation/documents, builds a repository manifest, dispatches one worker PER FILE and one scanner PER resources file (parallel batch), then dispatches edge-checkers for cross-document consistency groups from graph.yaml, and merges every subagent's on-disk result into consistency-validator.json.
+description: Orchestrator for parallel documentation validation. Discovers the document folders under documentation/documents, builds a repository manifest, dispatches one worker PER DOCUMENT FOLDER and one scanner PER resources file (parallel batch), then dispatches edge-checkers for the cross-document consistency groups in graph/edges.yaml, and merges every subagent's on-disk result into consistency-validator.json.
 ---
 
 # Document Validator — Orchestrator
@@ -8,37 +8,36 @@ description: Orchestrator for parallel documentation validation. Discovers every
 ## HOW TO SPAWN A SUBAGENT (read first — the task text carries all the data)
 
 A subagent starts with a blank context. It sees **only the task description you write** — nothing
-from your context, no separate parameters, no repository URL, no file path unless you put them in the
-task text. So every `task` description you write **must begin with this exact line**:
+from your context, no separate parameters, no repository URL, no path unless you put them in the
+task text. So every `task` description **must begin with this exact line**:
 
 ```
-REPO: <repository_url> BRANCH: <branch> FILE: <file_path>
+worker:   REPO: <repository_url> BRANCH: <branch> DOC: <document folder>
+scanner:  REPO: <repository_url> BRANCH: <branch> FILE: <resources file>
 ```
 
-- `<repository_url>` and `<branch>` — copy verbatim from the workflow input (the same ones you used
-  in Phase 0). Never blank, never guessed.
-- `<file_path>` — the single repo-relative file that subagent must handle (the `.md` for a worker,
-  the `resources/` file for a scanner).
+- `<repository_url>` and `<branch>` — copy verbatim from the workflow input. Never blank, never guessed.
+- `DOC:` — a **folder** (`documentation/documents/about`). The worker validates the whole document:
+  `index.md` plus the fragments it includes. Never point a worker at a single fragment.
+- `FILE:` — one `resources/` file for a scanner.
 
-**Then always add `skill_dir` — an absolute path.** Subagents cannot resolve relative paths like
-`../graph.yaml`: every filesystem tool requires an absolute path starting with `/`. Without
-`skill_dir` they waste dozens of `glob`/`ls` calls hunting for the file and get killed by the
-execution timeout. Your own SKILL.md absolute path is shown in your Skills list — the directory
-containing it is the skill root. Pass that directory verbatim.
+**Then always add `skill_dir` — an absolute path.** Subagents cannot resolve relative paths: every
+filesystem tool requires an absolute path starting with `/`. Without `skill_dir` they waste dozens of
+`glob`/`ls` calls hunting for their graph file and get killed by the execution timeout. Your own
+SKILL.md absolute path is in your Skills list; its directory is the skill root.
 
 Concrete worker example:
 
 ```
-REPO: https://portal.works.prod.sbt/ssd/tools/sc/sowa/sowa_docs BRANCH: release/D-5.4.2 FILE: documentation/documents/about/functions.md
+REPO: https://portal.works.prod.sbt/ssd/tools/sc/sowa/sowa_docs BRANCH: release/D-5.4.2 DOC: documentation/documents/about
 skill_dir: /Users/<...>/svc-ai-agent/skills/document-validator
-output_path: /tmp/document-validator/files/about__functions.md.json
-manifest_path: /tmp/document-validator/manifest.json
 doc_type: about
+output_path: /tmp/document-validator/files/about.json
+manifest_path: /tmp/document-validator/manifest.json
 ```
 
-Every path you pass (`skill_dir`, `output_path`, `manifest_path`) must be **absolute**. If you spawn
-a subagent without the `REPO:` line or without `skill_dir`, it cannot do its job and the file fails.
-This is the one thing you must get right on each delegation.
+`doc_type` tells the worker which graph file to read (`<skill_dir>/graph/<doc_type>.yaml`) — pass it
+always. Every path (`skill_dir`, `output_path`, `manifest_path`) must be **absolute**.
 
 ## TWO SEPARATE TOOL FAMILIES — never mix them
 
@@ -86,19 +85,23 @@ You coordinate subagents. You do NOT do their work. Specifically:
 
 ## Canonical sources (skill root)
 
-- **`<skill_dir>/graph.yaml`** — the single source of truth: doc types, section trees, markers/flags, notes,
-  and **every** consistency edge (with `scope`, `code`, `group`). If anything here disagrees with
-  `graph.yaml`, `graph.yaml` wins.
+- **`<skill_dir>/graph/edges.yaml`** — every cross-document consistency edge (with `scope`, `code`,
+  `group`), the fact specs, the version check and the edge groups. **This is the one you read.**
+- **`<skill_dir>/graph/<doc_type>.yaml`** — one file per document type: its section tree, markers,
+  flags, intra-doc notes and the facts its worker must extract. These are for the **workers** —
+  you never read them; you just tell each worker its `doc_type`.
 - **`<skill_dir>/error-codes.md`** — finding codes, `message` templates, placeholder rules.
 - **`<skill_dir>/sensitive-data.md`** — sensitive-information dictionary for scanning `resources/`.
+
+If anything in this file disagrees with the graph files, the graph files win.
 
 ## Subagents you dispatch
 
 | Subagent (`name`) | Unit of work | Reads | Writes |
 |---|---|---|---|
-| `document-validator-worker` | one `.md` file | its file + graph.yaml + manifest | `files/<file_id>.json` |
+| `document-validator-worker` | one **document folder** (index.md + fragments) | its files + `graph/<doc_type>.yaml` + manifest | `files/<doc_type>.json` |
 | `document-validator-scanner` | one `resources/` file | its file + sensitive-data.md | `scans/<file_id>.json` |
-| `document-validator-edge-checker` | one edge group | graph.yaml + that group's facts files | `edges/<group_id>.json` |
+| `document-validator-edge-checker` | one edge group | `graph/edges.yaml` + that group's facts files | `edges/<group_id>.json` |
 
 ## Paths
 
@@ -120,10 +123,11 @@ with `/` → `__` (e.g. `developer-guide__index.md`, `architecture__resources__s
 
 0. Read `repository_url` and `branch` from the workflow input, and note your **`skill_dir`**: the
    directory containing your own SKILL.md, whose absolute path is shown in your Skills list (e.g.
-   `/Users/<...>/skills/document-validator`). `graph.yaml`, `error-codes.md` and `sensitive-data.md`
+   `/Users/<...>/skills/document-validator`). `graph/edges.yaml`, `error-codes.md` and `sensitive-data.md`
    sit in that directory. These three values — `repository_url`, `branch`, `skill_dir` — are the
    canonical constants for the whole run: **capture them once and pass them, verbatim, into every
-   task description you write.** Read `<skill_dir>/graph.yaml` yourself for the edge groups.
+   task description you write.** Read `<skill_dir>/graph/edges.yaml` yourself (edges + groups). The per-document section trees live in
+   `<skill_dir>/graph/<doc_type>.yaml` — those are for the workers, you never read them.
 1. Use the remote repository integration (source-control tool) for that `repository_url`/`branch` —
    **do not clone locally**.
 2. Enumerate the **full file tree** under `documentation/` via **one** repository listing call (no
@@ -133,21 +137,26 @@ with `/` → `__` (e.g. `developer-guide__index.md`, `architecture__resources__s
    `documentation/`. The manifest is the single existence-check source for all subagents — after it
    is written, no further listing calls are made anywhere in the run.
 4. From the manifest derive two work lists:
-   - **doc files**: every `.md` under `documentation/documents` → one worker each.
+   - **documents**: the distinct folders under `documentation/documents` that contain an `index.md`
+     (e.g. `documentation/documents/about`, `.../architecture`, …). **One worker per folder — not per
+     file.** A document is `index.md` plus the fragment `.md` files it includes; validating a fragment
+     on its own is meaningless (it holds one section, and the worker would report every other section
+     as missing). This keeps the run to ~12 workers instead of ~100.
    - **scan targets**: every file under any `resources/` folder (`**/resources/*`) with extensions
      `.png .jpg .jpeg .gif .bmp .webp .svg .drawio` → **dedupe by path** → one scanner each.
 5. Create the tmp directories (`files/`, `edges/`, `scans/`).
 
 ### Phase 1: Wave 1 — workers + scanners (single parallel batch)
 
-Emit, in ONE turn, a spawn call for every doc file AND every scan target. **Each task description
-begins with the `REPO:/BRANCH:/FILE:` line** (see "How to spawn a subagent" at the top — this is
-where `file_path` reaches the subagent). Then append:
+Emit, in ONE turn, a spawn call for every **document folder** AND every scan target. Each task
+description begins with its `REPO:/BRANCH:/…` line (see the top of this file). Then append:
 
-- **worker** (one per `.md` file): `FILE:` = that `.md`; then `output_path` = `.../files/<file_id>.json`,
-  `manifest_path`, and the `doc_type` hint.
-- **scanner** (one per resources file): `FILE:` = that resources file; then `output_path` =
-  `.../scans/<file_id>.json`.
+- **worker** (one per document folder): `DOC:` = the folder; then `skill_dir`, `doc_type`,
+  `output_path` = `.../files/<doc_type>.json`, `manifest_path`.
+- **scanner** (one per resources file): `FILE:` = that file; then `skill_dir`,
+  `output_path` = `.../scans/<file_id>.json`.
+
+Workers and scanners are independent — they belong in the same wave. Do not wait between spawns.
 
 The `REPO:/BRANCH:/FILE:` prefix is a hard contract: a subagent that does not receive it cannot
 access the repository and will fail. Build the line for every spawn without exception.
@@ -162,12 +171,12 @@ Workers and scanners are independent — they belong in the same wave. Do not wa
   { "code": "CVAL-WORKER", "severity": "WARNING", "path": "documentation/documents/<file>",
     "message": "Субагент не вернул результат по `<file>`." }
   ```
-- Build the **facts index**: `doc_type → path to that doc's facts file` (paths only; you do not read
+- Build the **facts index**: `doc_type → /…/files/<doc_type>.json` (paths only; you do not read
   facts content, except the single `presence` flags needed in Phase 3a).
 
 ### Phase 3a: Doc-existence edges (you, from the manifest)
 
-Handle `graph.yaml` edges with `scope: doc-existence` — these need only the manifest plus the single
+Handle `graph/edges.yaml` edges with `scope: doc-existence` — these need only the manifest plus the single
 `presence` flag of a trigger section from the architecture facts file (one narrow field read):
 
 - `E-DEP-1`, `E-DEP-2` → `CVAL-DEP`: trigger section is non-empty but the required doc is absent from
@@ -179,11 +188,11 @@ Handle `graph.yaml` edges with `scope: doc-existence` — these need only the ma
 
 Edge-checkers do **not** touch the repository — they read facts files from disk. So their task text
 does **not** use the `REPO:/BRANCH:/FILE:` line; instead each task description carries the paths they
-need — all **absolute**. Emit, in ONE turn, a spawn call for every group in `graph.yaml → edge_groups`
+need — all **absolute**. Emit, in ONE turn, a spawn call for every group in `graph/edges.yaml → edge_groups`
 (GRP-SPO, GRP-DEPLOY, GRP-ARCH, GRP-SCEN, GRP-RN, GRP-VER). For each
 `document-validator-edge-checker` put in the task description:
 
-- `skill_dir` — absolute path to the skill root (they read `<skill_dir>/graph.yaml` and
+- `skill_dir` — absolute path to the skill root (they read `<skill_dir>/graph/edges.yaml` and
   `<skill_dir>/error-codes.md`; without it they hunt the filesystem and time out).
 - `group_id`.
 - `facts_paths` — map `doc_type → absolute path to facts JSON` for that group's docs only; `null` if

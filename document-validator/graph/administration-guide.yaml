@@ -1,0 +1,32 @@
+# Document Validator — секция графа для doc_type: administration-guide
+# Читает ТОЛЬКО worker этого документа. Рёбра между документами — в graph/edges.yaml
+
+doc_type: administration-guide
+title: Руководство администратора
+sections:
+- name: Сценарии администрирования
+  children:
+  - name: Как определить версию продукта
+  - name: Сценарий администрирования
+- name: Системный журнал
+  children:
+  - name: Настройка системного журнала
+  - name: Доступ к системному журналу
+  - name: Основные события
+- name: Мониторинг
+  children:
+  - name: Настройка
+  - name: Метрики
+    markers:
+    - table
+- name: Часто встречающиеся проблемы и пути их устранения
+facts_to_extract:
+  version:
+    fact: version_value
+    spec: Строка версии как есть (например «D-6.0.0»).
+  Сценарии администрирования:
+    fact: scenario_names
+    spec: Список названий сценариев (только заголовки, без содержимого).
+  Сценарий администрирования:
+    fact: scenario_names
+    spec: Список названий сценариев (только заголовки, без содержимого).

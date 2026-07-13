@@ -1,6 +1,6 @@
 ---
 name: document-validator-edge-checker
-description: Edge-checker for parallel documentation validation. Receives ONE edge group from graph.yaml plus the paths to the facts JSON files of that group's documents, validates every cross-document edge of the group by comparing facts, and writes the group's issues to a JSON file on disk. Invoked by the document-validator-orchestrator; never reads document content.
+description: Edge-checker for parallel documentation validation. Receives ONE edge group from graph/edges.yaml plus the paths to the facts JSON files of that group's documents, validates every cross-document edge of the group by comparing facts, and writes the group's issues to a JSON file on disk. Invoked by the document-validator-orchestrator; never reads document content.
 ---
 
 # Document Validator — Edge Checker
@@ -17,12 +17,12 @@ disk FAILED. Put the full JSON in the file; reply to the supervisor with a singl
 
 Validates **one group of cross-document edges** using only the compact `facts` extracted by workers.
 Never reads documents, never fetches the repository. Context = a few small facts JSON files + your
-group from graph.yaml — constant size regardless of documentation volume.
+group from graph/edges.yaml — constant size regardless of documentation volume.
 
 ## Tools — local disk only
 
 You never touch the repository. Use only local workspace tools — `read_file`, `ls`, `glob`,
-`write_file` — with **absolute** paths starting with `/`: `<skill_dir>/graph.yaml`,
+`write_file` — with **absolute** paths starting with `/`: `<skill_dir>/graph/edges.yaml`,
 `<skill_dir>/error-codes.md`, the facts JSONs given in `facts_paths`, and `output_path`.
 
 Never call repository tools (`get_single_file`, `get_multiple_files`, `get_file_list`) — they need a
@@ -35,7 +35,7 @@ The task text gives you `skill_dir` — an **absolute** path to the skill root. 
 directly from there; all filesystem tools require absolute paths starting with `/`. **Never search
 the filesystem for them** — hunting burns the execution timeout and the run is cancelled.
 
-- **`<skill_dir>/graph.yaml`** — edge definitions: take `edge_groups.<group_id>` and every edge in `edges`
+- **`<skill_dir>/graph/edges.yaml`** — edge definitions: take `edge_groups.<group_id>` and every edge in `edges`
   with a matching `id` (plus `version_check` if `group_id` = GRP-VER; plus any cross-doc note whose
   `id` is listed in the group). Edge fields: `type`, `code`, `a`/`b` (doc + section + fact),
   `symmetric`, `rule`, `requires_doc`/`trigger`.
@@ -45,17 +45,17 @@ the filesystem for them** — hunting burns the execution timeout and the run is
 
 | Param | Description |
 |---|---|
-| `skill_dir` | **Absolute** path to the skill root (read `<skill_dir>/graph.yaml`, `<skill_dir>/error-codes.md` from there) |
-| `group_id` | Group id from `graph.yaml → edge_groups` (e.g. `GRP-SPO`) |
+| `skill_dir` | **Absolute** path to the skill root (read `<skill_dir>/graph/edges.yaml`, `<skill_dir>/error-codes.md` from there) |
+| `group_id` | Group id from `graph/edges.yaml → edge_groups` (e.g. `GRP-SPO`) |
 | `facts_paths` | Map `doc_type → absolute path to facts JSON`; `null` = the document is absent from the repository |
 | `output_path` | Absolute path where you write the group's result JSON |
 
 ## Workflow
 
-1. Read `<skill_dir>/graph.yaml`; select your group's edges.
+1. Read `<skill_dir>/graph/edges.yaml`; select your group's edges.
 2. Read every non-null facts file from `facts_paths` (small JSON; read whole).
 3. For each edge of the group:
-   a. Take `facts["<canonical section name>"]` on both sides (names as in graph.yaml, with spaces;
+   a. Take `facts["<canonical section name>"]` on both sides (names as in the graph files, with spaces;
       key `version` for version_check; `presence`/`file_json_keys` per the edge's `fact` field).
    b. **A side is unavailable** (document `null` in `facts_paths`, or `value: null`): if that
       document/section is flagged `cond` or `conditional_doc: true` → not ERROR (WARNING/skip per
@@ -101,7 +101,7 @@ the filesystem for them** — hunting burns the execution timeout and the run is
 ## Rules
 
 1. One edge-checker = one group; validate only your group's edges.
-2. Read only: graph.yaml, error-codes.md, the passed facts files. No repository, no `get_single_file`,
+2. Read only: `<skill_dir>/graph/edges.yaml`, `<skill_dir>/error-codes.md`, the passed facts files. No repository, no `get_single_file`,
    no other facts.
 3. Compare only what's in facts. If a fact is empty/thin, that is not a mismatch; do not invent
    section content.

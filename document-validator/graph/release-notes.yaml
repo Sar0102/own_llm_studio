@@ -1,0 +1,57 @@
+# Document Validator — секция графа для doc_type: release-notes
+# Читает ТОЛЬКО worker этого документа. Рёбра между документами — в graph/edges.yaml
+
+doc_type: release-notes
+title: Примечания к релизу
+sections:
+- name: Секция версии продукта
+  children:
+  - name: Компонентный состав
+    markers:
+    - ref
+    flags:
+    - gen
+  - name: Изменение функциональности
+    flags:
+    - cond
+    - gen
+  - name: Исправленные ошибки
+    flags:
+    - cond
+    - gen
+  - name: Устраненные уязвимости
+    flags:
+    - cond
+    - gen
+  - name: Обратная совместимость
+    markers:
+    - manual
+    flags:
+    - version_aware
+  - name: Известные проблемы
+    markers:
+    - manual
+  - name: Изменения в параметрах установки и настройки
+    markers:
+    - manual
+  - name: Изменения в документации
+    markers:
+    - manual
+    flags:
+    - version_aware
+facts_to_extract:
+  version:
+    fact: version_value
+    spec: Строка версии как есть (например «D-6.0.0»).
+  Изменение функциональности:
+    fact: item_names
+    spec: Список названий пунктов/подразделов раздела.
+  Изменения в параметрах установки и настройки:
+    fact: item_names
+    spec: Список названий пунктов/подразделов раздела.
+  Исправленные ошибки:
+    fact: item_names
+    spec: Список названий пунктов/подразделов раздела.
+  Устраненные уязвимости:
+    fact: item_names
+    spec: Список названий пунктов/подразделов раздела.

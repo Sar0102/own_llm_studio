@@ -1,0 +1,20 @@
+# Document Validator — секция графа для doc_type: deployment
+# Читает ТОЛЬКО worker этого документа. Рёбра между документами — в graph/edges.yaml
+
+doc_type: deployment
+title: Диаграммы развертывания
+sections:
+- name: Типовые варианты развертывания
+  children:
+  - name: Вариант развертывания
+    flags:
+    - cond
+facts_to_extract:
+  __doc__:
+    fact: presence
+    spec: true/false — раздел или документ присутствует.
+  Вариант развертывания:
+    fact:
+    - item_names
+    - spo_list
+    spec: Список названий пунктов/подразделов раздела.

@@ -1,0 +1,18 @@
+# Document Validator — секция графа для doc_type: agent-guide
+# Читает ТОЛЬКО worker этого документа. Рёбра между документами — в graph/edges.yaml
+
+doc_type: agent-guide
+title: Руководство прикладного администратора
+conditional_doc: true
+files:
+- agent.json
+sections:
+- name: Общие сведения
+  markers:
+  - ref
+- name: Установка
+  children:
+  - name: Порядок установки
+- name: Обновление
+- name: Удаление
+- name: Часто встречающиеся проблемы и пути их устранения

@@ -1,0 +1,36 @@
+# Document Validator — секция графа для doc_type: pmi
+# Читает ТОЛЬКО worker этого документа. Рёбра между документами — в graph/edges.yaml
+
+doc_type: pmi
+title: Программа и методика испытаний
+aliases:
+- test-plan
+sections:
+- name: Объект испытаний и требования
+  markers:
+  - ref
+- name: Методы испытаний
+  markers:
+  - ref
+  children:
+  - name: Изменение функциональности
+    flags:
+    - cond
+    - gen
+  - name: Исправленные ошибки
+    flags:
+    - cond
+    - gen
+  - name: Регрессионные тесты
+    markers:
+    - ref
+facts_to_extract:
+  version:
+    fact: version_value
+    spec: Строка версии как есть (например «D-6.0.0»).
+  Изменение функциональности:
+    fact: item_names
+    spec: Список названий пунктов/подразделов раздела.
+  Исправленные ошибки:
+    fact: item_names
+    spec: Список названий пунктов/подразделов раздела.

@@ -1,0 +1,25 @@
+# Document Validator — секция графа для doc_type: user-guide
+# Читает ТОЛЬКО worker этого документа. Рёбра между документами — в graph/edges.yaml
+
+doc_type: user-guide
+title: Руководство пользователя
+conditional_doc: true
+sections:
+- name: Доступ к приложению
+  children:
+  - name: Запуск приложения
+  - name: Вход и выход
+  - name: Порядок доступа
+  - name: Роли пользователей
+    markers:
+    - manual
+- name: Использование приложения
+  children:
+  - name: Сценарий использования
+  - name: Как определить версию продукта
+- name: Настройка приложения
+- name: Часто встречающиеся проблемы и пути их устранения
+facts_to_extract:
+  Использование приложения:
+    fact: scenario_names
+    spec: Список названий сценариев (только заголовки, без содержимого).
