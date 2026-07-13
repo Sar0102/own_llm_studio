@@ -61,9 +61,6 @@ You coordinate subagents. You do NOT do their work. Specifically:
 - **`./error-codes.md`** — finding codes, `message` templates, placeholder rules.
 - **`./sensitive-data.md`** — sensitive-information dictionary for scanning `resources/`.
 
-There is no PlantUML diagram anymore (it caused the ambiguities: nesting via `___`, semantics via
-colour, node aliases). Do not reconstruct it or rely on memory of it.
-
 ## Subagents you dispatch
 
 | Subagent (`name`) | Unit of work | Reads | Writes |
