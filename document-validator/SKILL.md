@@ -5,7 +5,36 @@ description: Orchestrator for parallel documentation validation. Discovers every
 
 # Document Validator — Orchestrator
 
-## YOU ARE A DISPATCHER (read first — hard constraints)
+## HOW TO SPAWN A SUBAGENT (read first — the task text carries all the data)
+
+A subagent starts with a blank context. It sees **only the task description you write** — nothing
+from your context, no separate parameters, no repository URL, no file path unless you put them in the
+task text. So every `task` description you write **must begin with this exact line**:
+
+```
+REPO: <repository_url> BRANCH: <branch> FILE: <file_path>
+```
+
+- `<repository_url>` and `<branch>` — copy verbatim from the workflow input (the same ones you used
+  in Phase 0). Never blank, never guessed.
+- `<file_path>` — the single repo-relative file that subagent must handle (the `.md` for a worker,
+  the `resources/` file for a scanner).
+
+After that first line, append the rest of the task (output_path, manifest_path, doc_type — see each
+phase). Concrete worker example:
+
+```
+REPO: https://portal.works.prod.sbt/ssd/tools/sc/sowa/sowa_docs BRANCH: release/D-5.4.2 FILE: documentation/documents/about/index.md
+output_path: /docstorage/tmp/<uid>/tmp/document-validator/files/about__index.md.json
+manifest_path: /docstorage/tmp/<uid>/tmp/document-validator/manifest.json
+doc_type: about
+```
+
+If you spawn a subagent without this first line, it cannot open the repository and the whole file
+fails. Write the line for **every** spawn, without exception. This is the one thing you must get
+right on each delegation.
+
+## YOU ARE A DISPATCHER (hard constraints)
 
 You coordinate subagents. You do NOT do their work. Specifically:
 
@@ -80,23 +109,14 @@ with `/` → `__` (e.g. `developer-guide__index.md`, `architecture__resources__s
 
 ### Phase 1: Wave 1 — workers + scanners (single parallel batch)
 
-Emit, in ONE turn, a spawn call for every doc file AND every scan target. The task text you pass to
-each subagent **MUST begin with exactly this line** (arguments travel inside the task text — there is
-no separate parameter channel):
+Emit, in ONE turn, a spawn call for every doc file AND every scan target. **Each task description
+begins with the `REPO:/BRANCH:/FILE:` line** (see "How to spawn a subagent" at the top — this is
+where `file_path` reaches the subagent). Then append:
 
-```
-REPO: <repository_url> BRANCH: <branch> FILE: <file_path>
-```
-
-Use the workflow's `repository_url` and `branch` **verbatim** (the same values from Phase 0); never
-omit this line and never let the subagent guess these values. After that first line, add the rest:
-
-- **worker**: `output_path` = `.../files/<file_id>.json`, `manifest_path`, `doc_type` hint.
-  Example task text:
-  `REPO: https://portal.works.prod.sbt/... BRANCH: release/D-5.4.2 FILE: documentation/documents/about/index.md`
-  then `output_path: .../files/about__index.md.json manifest_path: .../manifest.json doc_type: about`.
-- **scanner**: `output_path` = `.../scans/<file_id>.json`. Same mandatory first line with the
-  resources file as `FILE:`.
+- **worker** (one per `.md` file): `FILE:` = that `.md`; then `output_path` = `.../files/<file_id>.json`,
+  `manifest_path`, and the `doc_type` hint.
+- **scanner** (one per resources file): `FILE:` = that resources file; then `output_path` =
+  `.../scans/<file_id>.json`.
 
 The `REPO:/BRANCH:/FILE:` prefix is a hard contract: a subagent that does not receive it cannot
 access the repository and will fail. Build the line for every spawn without exception.
@@ -126,8 +146,11 @@ Handle `graph.yaml` edges with `scope: doc-existence` — these need only the ma
 
 ### Phase 3b: Wave 2 — edge-checkers (single parallel batch)
 
-Emit, in ONE turn, a spawn call for every group in `graph.yaml → edge_groups` (GRP-SPO, GRP-DEPLOY,
-GRP-ARCH, GRP-SCEN, GRP-RN, GRP-DEP, GRP-VER). For each `document-validator-edge-checker` pass:
+Edge-checkers do **not** touch the repository — they read facts files from disk. So their task text
+does **not** use the `REPO:/BRANCH:/FILE:` line; instead each task description carries the paths they
+need. Emit, in ONE turn, a spawn call for every group in `graph.yaml → edge_groups` (GRP-SPO,
+GRP-DEPLOY, GRP-ARCH, GRP-SCEN, GRP-RN, GRP-DEP, GRP-VER). For each `document-validator-edge-checker`
+put in the task description:
 
 - `group_id`.
 - `facts_paths` — map `doc_type → path to facts JSON` for that group's docs only; `null` if the doc
