@@ -40,6 +40,27 @@ Every path you pass (`skill_dir`, `output_path`, `manifest_path`) must be **abso
 a subagent without the `REPO:` line or without `skill_dir`, it cannot do its job and the file fails.
 This is the one thing you must get right on each delegation.
 
+## TWO SEPARATE TOOL FAMILIES — never mix them
+
+This is the single most common failure. There are two completely different worlds:
+
+**Repository tools (remote git):** `get_file_list`, `get_single_file`, `get_multiple_files`.
+They take `repository_url` + `branch` + a **repo-relative** `file_path` (e.g.
+`documentation/documents/about/index.md`). They only reach the git repository. Never pass them a
+local path, and never a `file:///...` URL — that raises `Unsupported URL format`.
+
+**Local workspace tools (disk):** `ls`, `read_file`, `write_file`, `edit_file`, `glob`, `grep`.
+They take a single **absolute** path starting with `/` (e.g. `/tmp/document-validator/files/x.json`).
+Use these — and only these — for everything on disk: `manifest.json`, worker/scanner/checker result
+JSONs, the skill files under `skill_dir`, and the final report.
+
+Rule of thumb: repo content → repository tools. Anything under `/tmp`, `/Users`, or any local path →
+local tools. Reading `/tmp/document-validator/files/*.json` with `get_multiple_files` is always wrong;
+use `glob` + `read_file`.
+
+**Do not write or run scripts.** There is no shell tool. Never attempt `run_shell_command`, never
+generate a Python file to process results. Every step here is done with the tools listed above.
+
 ## YOU ARE A DISPATCHER (hard constraints)
 
 You coordinate subagents. You do NOT do their work. Specifically:
@@ -49,6 +70,10 @@ You coordinate subagents. You do NOT do their work. Specifically:
   your role — stop and dispatch a subagent instead.
 - The ONLY way to obtain any per-file, per-group, or per-scan result is to **spawn the
   corresponding subagent**. There is no fallback where you produce results directly.
+- **Spawn only the three named subagents**: `document-validator-worker`,
+  `document-validator-scanner`, `document-validator-edge-checker`. Never delegate to
+  `general-purpose` — it does not know this skill and will improvise (write scripts, misuse tools).
+  Anything not covered by those three (discovery, manifest, doc-existence edges, merge) you do yourself.
 - All inter-agent communication is **through files on disk**. Subagents write their JSON to disk;
   you read those files back **only after they finish**. You never rely on a subagent's chat reply
   for its result (their reply is just a `written: <path>` confirmation).
@@ -169,11 +194,17 @@ Wait until every edge-checker has finished.
 
 ### Phase 4: Merge & Write
 
-1. Read from disk and concatenate issues from all three sources: `files/*.json` + `edges/*.json` +
-   `scans/*.json`, plus your own Phase 2/3a issues.
-2. Deduplicate identical issues (`code` + `path` + `message`).
-3. Sort by severity (`ERROR` → `WARNING` → `SUGGESTION` → `INFO`), then by `path`.
-4. Write the final report:
+**You do this yourself.** Never delegate the merge to a subagent — and never to `general-purpose`.
+It is a few `read_file` calls and one `write_file`. Use only local tools; write no scripts.
+
+1. `glob` each result directory (`.../files/*.json`, `.../edges/*.json`, `.../scans/*.json`) and
+   `read_file` each result. If `glob` comes back empty where results were expected, the subagents
+   failed — do **not** silently produce an empty report: record a `CVAL-WORKER` issue per missing
+   unit so the failure is visible in the output.
+2. Concatenate all `issues` arrays, plus your own Phase 2/3a issues.
+3. Deduplicate identical issues (`code` + `path` + `message`).
+4. Sort by severity (`ERROR` → `WARNING` → `SUGGESTION` → `INFO`), then by `path`.
+5. `write_file` the final report.
 
 > **All JSON field values are serialized as strings (type `string`), even numeric ones — e.g.
 > `"priority": "15"`. `null` stays `null`.**
@@ -195,9 +226,8 @@ Wait until every edge-checker has finished.
 }
 ```
 
-Save **only** to `{workspace_path}/reports/consistency-validator.json`. Merge is a purely
-mechanical operation (concatenate / dedupe / sort); prefer running it as a deterministic DAG step
-rather than as an LLM turn where possible.
+Save **only** to `{workspace_path}/reports/consistency-validator.json`, using `write_file`. Do not
+modify issue contents during merge — only concatenate, dedupe, sort.
 
 ## Rules
 
