@@ -20,19 +20,25 @@ REPO: <repository_url> BRANCH: <branch> FILE: <file_path>
 - `<file_path>` — the single repo-relative file that subagent must handle (the `.md` for a worker,
   the `resources/` file for a scanner).
 
-After that first line, append the rest of the task (output_path, manifest_path, doc_type — see each
-phase). Concrete worker example:
+**Then always add `skill_dir` — an absolute path.** Subagents cannot resolve relative paths like
+`../graph.yaml`: every filesystem tool requires an absolute path starting with `/`. Without
+`skill_dir` they waste dozens of `glob`/`ls` calls hunting for the file and get killed by the
+execution timeout. Your own SKILL.md absolute path is shown in your Skills list — the directory
+containing it is the skill root. Pass that directory verbatim.
+
+Concrete worker example:
 
 ```
-REPO: https://portal.works.prod.sbt/ssd/tools/sc/sowa/sowa_docs BRANCH: release/D-5.4.2 FILE: documentation/documents/about/index.md
-output_path: /docstorage/tmp/<uid>/tmp/document-validator/files/about__index.md.json
-manifest_path: /docstorage/tmp/<uid>/tmp/document-validator/manifest.json
+REPO: https://portal.works.prod.sbt/ssd/tools/sc/sowa/sowa_docs BRANCH: release/D-5.4.2 FILE: documentation/documents/about/functions.md
+skill_dir: /Users/<...>/svc-ai-agent/skills/document-validator
+output_path: /tmp/document-validator/files/about__functions.md.json
+manifest_path: /tmp/document-validator/manifest.json
 doc_type: about
 ```
 
-If you spawn a subagent without this first line, it cannot open the repository and the whole file
-fails. Write the line for **every** spawn, without exception. This is the one thing you must get
-right on each delegation.
+Every path you pass (`skill_dir`, `output_path`, `manifest_path`) must be **absolute**. If you spawn
+a subagent without the `REPO:` line or without `skill_dir`, it cannot do its job and the file fails.
+This is the one thing you must get right on each delegation.
 
 ## YOU ARE A DISPATCHER (hard constraints)
 
@@ -55,11 +61,11 @@ You coordinate subagents. You do NOT do their work. Specifically:
 
 ## Canonical sources (skill root)
 
-- **`./graph.yaml`** — the single source of truth: doc types, section trees, markers/flags, notes,
+- **`<skill_dir>/graph.yaml`** — the single source of truth: doc types, section trees, markers/flags, notes,
   and **every** consistency edge (with `scope`, `code`, `group`). If anything here disagrees with
   `graph.yaml`, `graph.yaml` wins.
-- **`./error-codes.md`** — finding codes, `message` templates, placeholder rules.
-- **`./sensitive-data.md`** — sensitive-information dictionary for scanning `resources/`.
+- **`<skill_dir>/error-codes.md`** — finding codes, `message` templates, placeholder rules.
+- **`<skill_dir>/sensitive-data.md`** — sensitive-information dictionary for scanning `resources/`.
 
 ## Subagents you dispatch
 
@@ -87,9 +93,12 @@ with `/` → `__` (e.g. `developer-guide__index.md`, `architecture__resources__s
 
 ### Phase 0: Discovery & Manifest
 
-0. Read `repository_url` and `branch` from the workflow input. These are the canonical repository
-   coordinates for the whole run — **capture them once and pass them, verbatim, to every subagent you
-   spawn.** Never let a subagent construct or guess a URL/branch, and never alter them yourself.
+0. Read `repository_url` and `branch` from the workflow input, and note your **`skill_dir`**: the
+   directory containing your own SKILL.md, whose absolute path is shown in your Skills list (e.g.
+   `/Users/<...>/skills/document-validator`). `graph.yaml`, `error-codes.md` and `sensitive-data.md`
+   sit in that directory. These three values — `repository_url`, `branch`, `skill_dir` — are the
+   canonical constants for the whole run: **capture them once and pass them, verbatim, into every
+   task description you write.** Read `<skill_dir>/graph.yaml` yourself for the edge groups.
 1. Use the remote repository integration (source-control tool) for that `repository_url`/`branch` —
    **do not clone locally**.
 2. Enumerate the **full file tree** under `documentation/` via **one** repository listing call (no
@@ -145,13 +154,15 @@ Handle `graph.yaml` edges with `scope: doc-existence` — these need only the ma
 
 Edge-checkers do **not** touch the repository — they read facts files from disk. So their task text
 does **not** use the `REPO:/BRANCH:/FILE:` line; instead each task description carries the paths they
-need. Emit, in ONE turn, a spawn call for every group in `graph.yaml → edge_groups` (GRP-SPO,
-GRP-DEPLOY, GRP-ARCH, GRP-SCEN, GRP-RN, GRP-VER). For each `document-validator-edge-checker`
-put in the task description:
+need — all **absolute**. Emit, in ONE turn, a spawn call for every group in `graph.yaml → edge_groups`
+(GRP-SPO, GRP-DEPLOY, GRP-ARCH, GRP-SCEN, GRP-RN, GRP-VER). For each
+`document-validator-edge-checker` put in the task description:
 
+- `skill_dir` — absolute path to the skill root (they read `<skill_dir>/graph.yaml` and
+  `<skill_dir>/error-codes.md`; without it they hunt the filesystem and time out).
 - `group_id`.
-- `facts_paths` — map `doc_type → path to facts JSON` for that group's docs only; `null` if the doc
-  is absent from the repository (the checker applies conditionality rules).
+- `facts_paths` — map `doc_type → absolute path to facts JSON` for that group's docs only; `null` if
+  the doc is absent from the repository (the checker applies conditionality rules).
 - `output_path` = `.../edges/<group_id>.json`.
 
 Wait until every edge-checker has finished.
@@ -203,7 +214,7 @@ rather than as an LLM turn where possible.
 
 ## Finding Writing Guidance
 
-Finding text rules, codes, templates and placeholders are defined **only** in `./error-codes.md`.
+Finding text rules, codes, templates and placeholders are defined **only** in `<skill_dir>/error-codes.md`.
 Before writing any of your own findings (Phase 2/3a), open it and take the `code`, template and
 placeholder rules from there. In short: `message`/`advice` in Russian, technical terms in English;
 be specific (file + section + line); no modality or emotion; the text never changes severity.
