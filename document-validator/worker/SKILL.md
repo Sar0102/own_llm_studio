@@ -73,17 +73,22 @@ The rest of the task text carries:
 | `doc_type` | Optional hint; if absent, infer it (folder / filename / front-matter; see `documents` keys and `aliases` in graph.yaml) |
 | `file_id` | Sanitized relative path used for the output filename (may be derived from `FILE:` if not given) |
 
-## Tools
+## Tools — two separate families, never mix them
 
-The repository is **remote** — never read repo files from the local filesystem.
+**Repository tools (remote git):** `get_single_file(repository_url, branch, file_path)` is the only
+way to obtain repository file content. Call it **exactly once**, for your own `file_path`, passing
+the `repository_url` and `branch` from the task line **verbatim**. Never substitute a different
+URL/branch, never derive them from the file content or memory, and never pass a local path or a
+`file:///...` URL to a repository tool — that fails with `Unsupported URL format`.
 
-- **`get_single_file(repository_url, branch, file_path)`** is the only way to obtain repository
-  file content. Call it **exactly once**, for your own `file_path`, passing the `repository_url` and
-  `branch` you received **verbatim**. No other calls: existence of `include`/reference targets is
-  checked against the manifest, never by probe fetches. Never substitute a different URL/branch and
-  never derive them from the file content or from memory.
-- `manifest.json` and `graph.yaml` are read from the local workspace disk (not the repository).
-- The write tool is used once, for `output_path` (Output Contract).
+**Local workspace tools (disk):** `ls`, `read_file`, `write_file`, `glob`, `grep` take a single
+**absolute** path starting with `/`. Use these — and only these — for `<skill_dir>/graph.yaml`,
+`<skill_dir>/error-codes.md`, `manifest_path`, and `output_path`. These files live on the workspace
+disk, not in the repository.
+
+Existence of `include`/reference targets is checked **against the manifest** (a local file), never by
+probe fetches. The write tool is used once, for `output_path`. There is no shell tool: never write or
+run scripts.
 
 ## Severity & Conditionality Rules (read first)
 
