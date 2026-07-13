@@ -21,23 +21,28 @@ group from graph.yaml — constant size regardless of documentation volume.
 
 ## Canonical sources
 
-- **`../graph.yaml`** — edge definitions: take `edge_groups.<group_id>` and every edge in `edges`
+The task text gives you `skill_dir` — an **absolute** path to the skill root. Read the skill files
+directly from there; all filesystem tools require absolute paths starting with `/`. **Never search
+the filesystem for them** — hunting burns the execution timeout and the run is cancelled.
+
+- **`<skill_dir>/graph.yaml`** — edge definitions: take `edge_groups.<group_id>` and every edge in `edges`
   with a matching `id` (plus `version_check` if `group_id` = GRP-VER; plus any cross-doc note whose
   `id` is listed in the group). Edge fields: `type`, `code`, `a`/`b` (doc + section + fact),
   `symmetric`, `rule`, `requires_doc`/`trigger`.
-- **`../error-codes.md`** — `message` templates and placeholders for each edge's code.
+- **`<skill_dir>/error-codes.md`** — `message` templates and placeholders for each edge's code.
 
 ## Input (from orchestrator)
 
 | Param | Description |
 |---|---|
+| `skill_dir` | **Absolute** path to the skill root (read `<skill_dir>/graph.yaml`, `<skill_dir>/error-codes.md` from there) |
 | `group_id` | Group id from `graph.yaml → edge_groups` (e.g. `GRP-SPO`) |
-| `facts_paths` | Map `doc_type → path to facts JSON`; `null` = the document is absent from the repository |
-| `output_path` | `{workspace_path}/tmp/document-validator/edges/<group_id>.json` |
+| `facts_paths` | Map `doc_type → absolute path to facts JSON`; `null` = the document is absent from the repository |
+| `output_path` | Absolute path where you write the group's result JSON |
 
 ## Workflow
 
-1. Read `../graph.yaml`; select your group's edges.
+1. Read `<skill_dir>/graph.yaml`; select your group's edges.
 2. Read every non-null facts file from `facts_paths` (small JSON; read whole).
 3. For each edge of the group:
    a. Take `facts["<canonical section name>"]` on both sides (names as in graph.yaml, with spaces;
@@ -92,5 +97,5 @@ group from graph.yaml — constant size regardless of documentation volume.
    section content.
 4. Every finding names both sides with coordinates (file + section + line).
 5. One issue per mismatch (symmetric, anti-dupes per `rule`).
-6. Finding text strictly per `../error-codes.md`; Russian text, English identifiers.
+6. Finding text strictly per `<skill_dir>/error-codes.md`; Russian text, English identifiers.
 7. Always write `output_path`; reply is one confirmation line.
