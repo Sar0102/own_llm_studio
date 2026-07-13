@@ -13,7 +13,7 @@ You validate ONE markdown file. To do that you MUST first read it. The correct r
 2. **Call `get_single_file(repository_url, branch, file_path)`** to fetch the file content. This
    call is REQUIRED — you cannot validate a file you have not read. A run that never calls
    `get_single_file` is a broken run, not a clean one.
-3. Read `../graph.yaml` for your doc type and validate the file (sections, includes, notes).
+3. Read `<skill_dir>/graph.yaml` for your doc type and validate the file (sections, includes, notes).
 4. Extract `facts`.
 5. **Write the result JSON to `output_path`.**
 
@@ -36,12 +36,17 @@ cross-document consistency and does **not** read binary attachments — instead 
 
 ## Canonical sources
 
-- **`../graph.yaml`** — the single source of truth for your doc type's section tree
+The task text gives you `skill_dir` — an **absolute** path to the skill root. Read the skill files
+directly from there. All filesystem tools require absolute paths starting with `/`. **Never search
+the filesystem for these files** (no `glob '**/graph.yaml'`, no `ls /`) — hunting for them burns the
+execution timeout and the run gets cancelled with nothing written.
+
+- **`<skill_dir>/graph.yaml`** — the single source of truth for your doc type's section tree
   (`documents.<doc_type>.sections`), markers (`table`/`uml`/`ref`/`link`/`manual`), flags
   (`cond`/`gen`/`version_aware`), artefact files (`files`), intra-doc notes (`notes` with
   `scope: intra-doc`) and intra-doc edges (`edges` with `scope: intra-doc` for your `doc`).
   Read it after fetching the file.
-- **`../error-codes.md`** — codes, `message` templates, placeholders. Open it before writing findings.
+- **`<skill_dir>/error-codes.md`** — codes, `message` templates, placeholders. Open it before writing findings.
 
 ## Input (from orchestrator)
 
@@ -62,8 +67,9 @@ The rest of the task text carries:
 
 | Param | Description |
 |---|---|
-| `output_path` | `{workspace_path}/tmp/document-validator/files/<file_id>.json` — where you write your result |
-| `manifest_path` | Path to `manifest.json` — the list of every repo-relative file path under `documentation/` |
+| `skill_dir` | **Absolute** path to the skill root. Read `<skill_dir>/graph.yaml` and `<skill_dir>/error-codes.md` from there directly — do not search for them |
+| `output_path` | Absolute path where you write your result JSON |
+| `manifest_path` | Absolute path to `manifest.json` — the list of every repo-relative file path under `documentation/` |
 | `doc_type` | Optional hint; if absent, infer it (folder / filename / front-matter; see `documents` keys and `aliases` in graph.yaml) |
 | `file_id` | Sanitized relative path used for the output filename (may be derived from `FILE:` if not given) |
 
@@ -115,7 +121,7 @@ defined mandatory sections, still extract `version` if present, then write the o
 1. **Fetch the file** via `get_single_file(repository_url, branch, file_path)` using the values
    parsed from the first task line. This is the required first action — everything below needs the
    file content.
-2. **Read graph.yaml** (`../graph.yaml`): the `documents.<doc_type>` block plus its intra-doc edges/notes.
+2. **Read graph.yaml** (`<skill_dir>/graph.yaml`): the `documents.<doc_type>` block plus its intra-doc edges/notes.
 3. **Identify** doc type (hint or inference). Unknown → see above.
 4. **Metainfo**: `std_exception_reason` → INFO + suppress.
 5. **Section tree**: build the heading tree of the file and compare it to `sections` from
@@ -213,7 +219,7 @@ Write to `output_path`:
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `code` | string | Yes | Rule code from `../error-codes.md` (family `CVAL-*`) |
+| `code` | string | Yes | Rule code from `<skill_dir>/error-codes.md` (family `CVAL-*`) |
 | `severity` | enum | Yes | `ERROR` \| `WARNING` \| `INFO` \| `SUGGESTION` |
 | `path` | string | Yes | File path with the `documentation/` prefix |
 | `message` | string | Yes | Description (Russian) |
@@ -231,7 +237,7 @@ Write to `output_path`:
 
 ## Finding Writing Guidance
 
-Codes, `message` templates and placeholders live **only** in `../error-codes.md`; open it before
+Codes, `message` templates and placeholders live **only** in `<skill_dir>/error-codes.md`; open it before
 writing each finding. The `message` and `advice` text is written **in Russian**, technical terms
 and identifiers in English (`include`, `front-matter`, section/file names). Rules: one or two
 factual sentences (what + where: section, `position`); no modality or emotion; specifics over
