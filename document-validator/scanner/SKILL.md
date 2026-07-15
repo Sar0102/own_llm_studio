@@ -61,6 +61,7 @@ incomplete) and stop. The rest of the task text carries:
 | Param | Description |
 |---|---|
 | `skill_dir` | **Absolute** path to the skill root (read `<skill_dir>/sensitive-data.md`, `<skill_dir>/error-codes.md` from there) |
+| `product` | Name of the product this documentation describes (e.g. `sowa`). **Never flag this name** — it is the subject of the docs, not a leak |
 | `output_path` | Absolute path where you write your result JSON |
 | `file_id` | Sanitized path for the output filename (may be derived from `FILE:`) |
 
@@ -68,7 +69,7 @@ incomplete) and stop. The rest of the task text carries:
 
 1. Read `<skill_dir>/sensitive-data.md`.
 2. **Size gate**: if the file size is known before reading and exceeds **5 MB** (before base64) —
-   do not read the content; emit one `CVAL-SENS-SKIP` (INFO, reason: size) and go to step 6.
+   do not read the content; emit one `CVAL-SENS-SKIP` (INFO, reason: size) and go to step 7.
 3. **Read** the file via `get_single_file(repository_url, branch, file_path)` — the single network
    call, passing `repository_url` and `branch` **verbatim** from your input; content arrives as
    **base64**.
@@ -82,12 +83,21 @@ incomplete) and stop. The rest of the task text carries:
      `image` column: text on screenshots (address bars, tabs, configs, logins/passwords, internal
      domains), faces/photos of people (SD-01), labels on diagrams, abbreviations. Inspect the whole
      image, including background, browser tabs, OS dock/panels.
-5. **Emit issues**: one finding = one category in one file (multiple hits → one finding with a count).
+5. **Apply exclusions before emitting** (see the "Ложноположительные зоны" block in
+   `sensitive-data.md`). A candidate is **not** a finding when it is: the **product name** given in
+   `product` (e.g. `sowa`, in any case — `SOWA`, `Sowa` — including as a component/service label on a
+   diagram; it is the subject of this documentation, not a leak); a local/reserved/example address
+   (`localhost`, private ranges, `example.com`); a **field or column name** in a data schema /
+   ER-diagram (`password`, `username`, `token` as table columns — not real values); or a neutral
+   technical component name (`auth-service`, `PostgreSQL`, `nginx`). Only real leaked **values** and
+   the internal dictionary names (SD-02, SD-08…SD-11) are findings. When unsure whether text is a
+   value or just a label/name — treat it as a label and do not flag.
+6. **Emit issues**: one finding = one category in one file (multiple hits → one finding with a count).
    Code `CVAL-SENS`, severity from the category table. **NEVER reproduce the found value** (no
    password, IP, name, or full domain) in `message` or `advice` — only the category plus a
    word-description of the location (`location_hint`). Unsupported type / decode failure →
    `CVAL-SENS-SKIP` (INFO, reason).
-6. **Write `output_path`** (always, even with empty `issues`), then reply `written: <output_path>`.
+7. **Write `output_path`** (always, even with empty `issues`), then reply `written: <output_path>`.
 
 ## Output
 
