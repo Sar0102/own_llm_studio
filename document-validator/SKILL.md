@@ -112,7 +112,8 @@ If anything in this file disagrees with the graph files, the graph files win.
 | Per-file results (workers write) | `{workspace_path}/tmp/document-validator/files/<file_id>.json` |
 | Edge-group results (edge-checkers write) | `{workspace_path}/tmp/document-validator/edges/<group_id>.json` |
 | Scanner results (scanners write) | `{workspace_path}/tmp/document-validator/scans/<file_id>.json` |
-| Final report (you write) | `{workspace_path}/reports/consistency-validator.json` |
+| Final report — consistency (you write) | `{workspace_path}/reports/consistency-validator.json` |
+| Final report — sensitive data (you write) | `{workspace_path}/reports/image-validator.json` |
 
 `workspace_path` = `/docstorage/tmp/{{workflow.uid}}/`. `<file_id>` = path relative to `documents`
 with `/` → `__` (e.g. `developer-guide__index.md`, `architecture__resources__scheme.png`).
@@ -123,10 +124,13 @@ with `/` → `__` (e.g. `developer-guide__index.md`, `architecture__resources__s
 
 0. Read `repository_url` and `branch` from the workflow input, and note your **`skill_dir`**: the
    directory containing your own SKILL.md, whose absolute path is shown in your Skills list (e.g.
-   `/Users/<...>/skills/document-validator`). `graph/edges.yaml`, `error-codes.md` and `sensitive-data.md`
-   sit in that directory. These three values — `repository_url`, `branch`, `skill_dir` — are the
-   canonical constants for the whole run: **capture them once and pass them, verbatim, into every
-   task description you write.** Read `<skill_dir>/graph/edges.yaml` yourself (edges + groups). The per-document section trees live in
+   `/Users/<...>/skills/document-validator`). `graph/edges.yaml`, `error-codes.md` and
+   `sensitive-data.md` sit under it. Also derive the **product name** from `repository_url` — the
+   repository slug (e.g. `.../sc/sowa/sowa_docs` → product `sowa`). This is the name of the very
+   product this documentation describes; scanners must not flag it as sensitive. These values —
+   `repository_url`, `branch`, `skill_dir`, `product` — are the canonical constants for the whole
+   run: **capture them once and pass them, verbatim, into every task description you write.** Read
+   `<skill_dir>/graph/edges.yaml` yourself (edges + groups). The per-document section trees live in
    `<skill_dir>/graph/<doc_type>.yaml` — those are for the workers, you never read them.
 1. Use the remote repository integration (source-control tool) for that `repository_url`/`branch` —
    **do not clone locally**.
@@ -153,8 +157,8 @@ description begins with its `REPO:/BRANCH:/…` line (see the top of this file).
 
 - **worker** (one per document folder): `DOC:` = the folder; then `skill_dir`, `doc_type`,
   `output_path` = `.../files/<doc_type>.json`, `manifest_path`.
-- **scanner** (one per resources file): `FILE:` = that file; then `skill_dir`,
-  `output_path` = `.../scans/<file_id>.json`.
+- **scanner** (one per resources file): `FILE:` = that file; then `skill_dir`, `product` (the product
+  name from Phase 0 — the scanner must not flag it), `output_path` = `.../scans/<file_id>.json`.
 
 Workers and scanners are independent — they belong in the same wave. Do not wait between spawns.
 
@@ -201,19 +205,30 @@ need — all **absolute**. Emit, in ONE turn, a spawn call for every group in `g
 
 Wait until every edge-checker has finished.
 
-### Phase 4: Merge & Write
+### Phase 4: Merge & Write — TWO separate reports
 
 **You do this yourself.** Never delegate the merge to a subagent — and never to `general-purpose`.
-It is a few `read_file` calls and one `write_file`. Use only local tools; write no scripts.
+It is a few `read_file` calls and two `write_file`. Use only local tools; write no scripts.
 
-1. `glob` each result directory (`.../files/*.json`, `.../edges/*.json`, `.../scans/*.json`) and
-   `read_file` each result. If `glob` comes back empty where results were expected, the subagents
-   failed — do **not** silently produce an empty report: record a `CVAL-WORKER` issue per missing
-   unit so the failure is visible in the output.
-2. Concatenate all `issues` arrays, plus your own Phase 2/3a issues.
-3. Deduplicate identical issues (`code` + `path` + `message`).
-4. Sort by severity (`ERROR` → `WARNING` → `SUGGESTION` → `INFO`), then by `path`.
-5. `write_file` the final report.
+The run produces **two independent reports** — do not mix their issues:
+
+**Report A — consistency** (`{workspace_path}/reports/consistency-validator.json`):
+1. `glob` `.../files/*.json` and `.../edges/*.json`, `read_file` each.
+2. Concatenate their `issues` plus your own Phase 2/3a issues (`CVAL-DEP`, `CVAL-LINK`, `CVAL-WORKER`).
+3. Deduplicate (`code` + `path` + `message`); sort by severity (`ERROR` → `WARNING` → `SUGGESTION`
+   → `INFO`), then `path`.
+4. `write_file` with `"title": "Согласованность документации"`.
+
+**Report B — sensitive data in images** (`{workspace_path}/reports/image-validator.json`):
+1. `glob` `.../scans/*.json`, `read_file` each.
+2. Concatenate their `issues` (`CVAL-SENS`, `CVAL-SENS-SKIP`).
+3. Deduplicate and sort the same way.
+4. `write_file` with `"title": "Чувствительная информация в изображениях"`.
+
+If a `glob` comes back empty where results were expected, the corresponding subagents failed — do
+**not** silently produce an empty report: record a `CVAL-WORKER` issue per missing unit (in report A)
+so the failure is visible. The two reports share the same object structure (`title`, `priority`,
+`issues`); only their contents and paths differ.
 
 > **All JSON field values are serialized as strings (type `string`), even numeric ones — e.g.
 > `"priority": "15"`. `null` stays `null`.**
@@ -235,8 +250,28 @@ It is a few `read_file` calls and one `write_file`. Use only local tools; write 
 }
 ```
 
-Save **only** to `{workspace_path}/reports/consistency-validator.json`, using `write_file`. Do not
-modify issue contents during merge — only concatenate, dedupe, sort.
+The example above is report A. Report B has the same shape with `CVAL-SENS` issues, e.g.:
+
+```json
+{
+  "title": "Чувствительная информация в изображениях",
+  "priority": "15",
+  "issues": [
+    {
+      "code": "CVAL-SENS",
+      "severity": "ERROR",
+      "path": "documentation/documents/architecture/resources/deploy-scheme.png",
+      "message": "В файле `...deploy-scheme.png` обнаружены признаки чувствительной информации: SD-04 — ссылки на внутренние ресурсы (2 вхождения), подписи узлов на схеме развертывания.",
+      "position": null,
+      "advice": "Заменить внутренние хосты на обезличенные имена узлов"
+    }
+  ]
+}
+```
+
+Write each report with `write_file` to its own path. Do not modify issue contents during merge —
+only concatenate, dedupe, sort. Never put `CVAL-SENS` issues into report A or consistency issues
+into report B.
 
 ## Rules
 
