@@ -5,28 +5,35 @@ description: Worker for parallel documentation validation. Receives ONE document
 
 # Document Validator — Worker
 
-## REQUIRED STEPS (three turns, no more)
+## REQUIRED STEPS (fetch the whole document, then validate)
 
-You validate ONE **document** — a folder like `documentation/documents/about`, made of `index.md`
-plus fragment files it includes. Not a single file: the whole document.
+You validate ONE **document**. A document is NOT one file. It is `index.md` plus the files it
+**links to** — `index.md` works like a table of contents: it links out to chapter files, and inside
+those a "Содержание" section links further to sub-section files. A section is present if it exists in
+**any** of these linked files. Judging `index.md` alone is the main cause of false "missing section"
+errors.
 
-**Turn 1 — fetch everything at once (3 parallel calls):**
-1. `get_single_file(repository_url, branch, <DOC>/index.md)` — the document entry point.
-2. `read_file(<skill_dir>/graph/<doc_type>.yaml)` — the section tree for your type (small file).
+**Turn 1 — start at the entry point (parallel):**
+1. `get_single_file(repository_url, branch, <DOC>/index.md)` — the document's table of contents.
+2. `read_file(<skill_dir>/graph/<doc_type>.yaml)` — the expected section tree (small file).
 3. `read_file(<manifest_path>)` — the repo file list (or `grep` it later if huge).
 
-**Turn 2 — fetch the fragments in one call:**
-4. Extract the `include` targets from `index.md`, then
-   `get_multiple_files(repository_url, branch, [<fragment paths>])` — **one** call for all of them.
-   Fragments are the rest of the document; without them the section tree is incomplete and you will
-   report sections as missing when they merely live in another file.
+**Turn 2 — follow the links and pull in the whole document:**
+4. Collect every **in-repo link** from `index.md` and from any "Содержание" / contents list inside
+   it — these are the chapter and sub-section files that make up the document. Resolve them
+   (see "Resolving links"), then fetch them all in **one** `get_multiple_files(repository_url,
+   branch, [paths])` call.
+5. If a fetched chapter file itself contains a "Содержание" / contents list pointing to more in-repo
+   files, collect those too and fetch them in **one** more `get_multiple_files` call. At most two
+   such link-following rounds — the document is shallow; do not recurse endlessly.
 
-**Turn 3 — validate and write:**
-5. Assemble the section tree (index.md + fragments in include order), validate, extract facts,
-   `write_file(<output_path>)`, reply `written: <output_path>`.
+**Turn 3 — assemble, validate, write:**
+6. Build ONE combined section tree from `index.md` + every file you pulled in, tracking which file
+   and line each heading came from. Validate this **assembled** tree against the graph, extract
+   facts, `write_file(<output_path>)`, reply `written: <output_path>`.
 
-Do not loop, do not explore the filesystem, do not re-fetch. An empty result means you skipped the
-fetch — that is a bug, not a clean document.
+Do not explore the filesystem blindly. An empty result means you skipped the fetch — that is a bug,
+not a clean document.
 
 ## Tools — two separate families, never mix them
 
@@ -59,33 +66,51 @@ Parse the three values and use them verbatim. `DOC:` is a **folder** (e.g.
 | `output_path` | **Absolute** path where you write your result JSON |
 | `manifest_path` | **Absolute** path to `manifest.json` — every repo-relative file path under `documentation/` |
 
-If `doc_type` has no graph file (unknown type such as `quick-guide`), emit one `INFO` that the type
-has no defined mandatory sections, extract `version` if present, write the output and stop.
+You are only spawned for document types that exist in the graph (the orchestrator skips unknown
+folders). If you nonetheless find no graph file for your `doc_type`, write an empty result
+(`issues: []`, `facts: {}`) and stop — never invent requirements for a type you don't know.
 
 ## Assembling the document
 
-A document is `index.md` + fragments pulled in via `include`. A section counts as **present** if it
-appears in *any* of these files. Build one combined heading tree in include order, tracking which
-file and line each heading came from (you need that for `position`).
+A document = `index.md` + every file it links to (chapters), + every file those link to via a
+"Содержание" list (sub-sections). A section counts as **present** if it appears in *any* of these
+files. Build one combined heading tree, tracking which file and line each heading came from (needed
+for `position`).
 
-Never judge a fragment on its own: `functions.md` holding only «Основные функции» is normal — the
-other sections live in sibling fragments. Missing-section findings are made against the **assembled**
-tree, never against a single file.
+Recognise a section heading in **any** of these forms — do not look only for `##` markdown headings:
+- a markdown heading (`#`…`######`) at the top of a linked file — its text is the section/subsection
+  name (e.g. a file whose H1 is «Сценарии администрирования»);
+- an item in a "Содержание" / contents list that links to another file — the **link target's own
+  heading** is the section name;
+- a list item or table row acting as a heading in docs that use `• ___Название` style.
+
+Never judge one file on its own. On the screen example, `administration-scenarios.md` contains only a
+"Содержание" with links — the real subsections («Сценарий администрирования», «Как определить версию
+продукта») live in the linked files. You must follow those links and take the subsections from the
+target files. Reporting them missing because they are not headings inside `index.md` is the exact bug
+to avoid. Missing-section findings are made against the **assembled** tree, never against one file.
 
 ## Severity & Conditionality Rules (apply before emitting anything)
 
+The report contains **only real problems: ERROR and WARNING**. Do **not** emit `INFO` or
+`SUGGESTION` findings at all — a legitimately-absent section (`std_exception_reason`) or a section
+that didn't exist in this version is simply **not written to the output**, not reported as a note.
+
 | Situation | Severity / Action |
 |---|---|
-| Mandatory section missing from the **assembled** tree | `ERROR` |
-| Metainfo contains `std_exception_reason` | `INFO` (`CVAL-NA`), suppress the corresponding ERRORs |
-| Section flagged `cond` in the graph file, or a note says "при наличии…" | `WARNING` or skip — never `ERROR` |
-| Section flagged `version_aware`, did not exist in this version | `SUGGESTION` |
+| Mandatory section missing from the **assembled** tree | `ERROR` (`CVAL-SEC`/`CVAL-SUBSEC`) |
+| Metainfo contains `std_exception_reason` | **suppress** — no finding at all (not even INFO) |
+| Section flagged `cond`, or a note says "при наличии…" | `WARNING` (`CVAL-COND`) or skip — never `ERROR` |
+| Section flagged `version_aware`, didn't exist in this version | **skip** — no finding (no SUGGESTION) |
 | Section flagged `gen` (auto-generated) | do **not** flag as missing |
-| Section present via `include`/link | counts as **present**; verify the target via manifest |
-| Marker `uml` but an image instead of a UML code block | `WARNING` (`CVAL-UML-IMG`) |
-| Marker `manual` satisfied by an `include` | `WARNING` — handwritten sections must not be included |
-| External/generated resource (`/info/*.json`, `required-software.json`, `rn-*.json`) | not a missing reference |
+| Section present via a linked file | counts as **present** |
+| Marker `uml` but a real raster image instead of a diagram | `WARNING` (`CVAL-UML-IMG`) |
 | Entries under `files` (`lib.json`, `agent.json`, …) | **files, not headings** — check via manifest; never `CVAL-SEC` |
+
+A `.drawio` file, a `.puml`/PlantUML block, or an embedded editable diagram **satisfies** marker
+`uml` — it is a UML diagram, not "an image". Only a plain raster screenshot (`.png`/`.jpg`) where a
+diagram is expected triggers `CVAL-UML-IMG`. A link like `logic-diagram.md?display=source` pointing
+at a `.drawio` is a diagram — do not flag it.
 
 ## Codes you may emit (the full dictionary is not needed)
 
@@ -94,10 +119,8 @@ tree, never against a single file.
 | `CVAL-SEC` | ERROR | Mandatory section missing | Отсутствует обязательный раздел «{section}» в `{doc}` ({position}). |
 | `CVAL-SUBSEC` | ERROR | Mandatory subsection missing | Отсутствует обязательный подраздел «{subsection}» раздела «{parent}» в `{doc}` ({position}). |
 | `CVAL-NEST` | WARNING | Subsection under the wrong parent | Подраздел «{subsection}» расположен не под «{parent}» в `{doc}` ({position}). |
-| `CVAL-NA` | INFO | `std_exception_reason` present | Раздел «{section}» отмечен неприменимым (`std_exception_reason`) в `{doc}` — отсутствие ожидаемо. |
 | `CVAL-COND` | WARNING | Conditional section absent | Условный раздел «{section}» отсутствует в `{doc}` — зависит от {reason}, не ошибка. |
-| `CVAL-VER-SEC` | SUGGESTION | Section didn't exist in this version | Раздел «{section}» отсутствует в `{doc}`; в версии {version} его ещё не было. |
-| `CVAL-UML-IMG` | WARNING | Image instead of a UML block | В разделе «{section}» (`{doc}`, {position}) ожидается блок-кода UML, присутствует изображение. |
+| `CVAL-UML-IMG` | WARNING | Raster image instead of a diagram | В разделе «{section}» (`{doc}`, {position}) ожидается UML-диаграмма, присутствует растровое изображение. |
 | `CVAL-INC` | ERROR | `include` target not in manifest | `include` из «{section}» (`{doc}`) ссылается на `{target}` — файла нет в манифесте репозитория. |
 | `CVAL-REF` | ERROR | Reference not in manifest | Ссылка на `{target}` из «{section}» (`{doc}`, {position}) не разрешается: файла нет в манифесте. |
 | `CVAL-PATH` | WARNING | Wrong path, file exists elsewhere | Ссылка на `{target}` из «{section}» (`{doc}`, {position}) указывает неверный путь — файл существует по `{actual_path}`. |
@@ -109,16 +132,30 @@ file. `{doc}` always starts with `documentation/` and names the **file** the fin
 or the fragment). Drop `({position})` entirely when the position is unknown — never write `(null)`.
 `advice`: imperative, one action, else `null`. Text never changes severity.
 
-## Include & reference resolution — manifest only
+## Which links to check (only same-repo, same-branch) — and which to skip
 
-a. Extract every `include` and in-repo `.md` reference from index.md and the fragments.
-b. Normalize: strip `#anchor` and `?query`; drop leading `./`; resolve `../` relative to the
-   **containing file's** directory; express repo-relative with the `documentation/` prefix.
-c. Exact match in the manifest → the target exists.
-d. No exact match → **before emitting ERROR**, look up the basename in the manifest (`grep` it
-   instead of reading the whole file if it is large): found elsewhere → `CVAL-PATH` (WARNING);
-   found nowhere → `CVAL-INC` / `CVAL-REF` (ERROR).
-e. Never verify existence with `get_single_file` — a network error is indistinguishable from a
+Two kinds of links must be handled differently:
+
+- **Structural links** — the contents lists in `index.md` and "Содержание" that point to chapter and
+  sub-section files of THIS document. You **follow** these to assemble the document (see above). They
+  are never "broken reference" findings; they are how the document is built.
+- **Plain references** in body text — these are what you check for existence, but **only** if they
+  point inside the same repository and branch. Everything else is out of scope: do **not** flag it.
+
+**Skip (never emit CVAL-INC/CVAL-REF) when the link is:**
+- an external URL — any `http://` or `https://` to another host (e.g. `docs.sbt/...`,
+  `portal.works.prod.sbt/...`). Not your repository, not your concern.
+- a link into a **different repository or branch** than the one you were given (`REPO:` / `BRANCH:`).
+- a pure `#anchor` (same-page link) or a `mailto:`.
+- an external/generated resource: `/info/*.json`, `required-software.json`, `rn-*.json`.
+
+**Check only** links that resolve to a file **in this repo** under `documentation/`:
+a. Normalize: strip `#anchor` and `?query` (e.g. `?display=source`); drop leading `./`; resolve `../`
+   relative to the containing file's directory; express repo-relative with the `documentation/` prefix.
+b. Exact match in the manifest → the target exists, nothing to report.
+c. No exact match → look up the basename in the manifest (`grep` it): found elsewhere → `CVAL-PATH`
+   (WARNING); found nowhere → `CVAL-REF` / `CVAL-INC` (ERROR).
+d. Never verify existence with `get_single_file` — a network error is indistinguishable from a
    missing file and produces false ERRORs.
 
 ## Intra-doc edges & notes
@@ -158,17 +195,17 @@ Write to `output_path`. **All JSON field values are strings, even numeric ones; 
 
 ```json
 {
-  "doc": "documentation/documents/developer-guide",
-  "doc_type": "developer-guide",
+  "doc": "documentation/documents/installation-guide",
+  "doc_type": "installation-guide",
   "facts": {},
   "issues": [
     {
-      "code": "CVAL-NA",
-      "severity": "INFO",
-      "path": "documentation/documents/developer-guide/index.md",
-      "message": "Раздел «Общие сведения» отмечен неприменимым (`std_exception_reason`) в `developer-guide` — отсутствие ожидаемо.",
-      "position": "front-matter",
-      "advice": null
+      "code": "CVAL-SEC",
+      "severity": "ERROR",
+      "path": "documentation/documents/installation-guide/index.md",
+      "message": "Отсутствует обязательный раздел «Удаление» в `installation-guide`.",
+      "position": null,
+      "advice": "Добавить раздел «Удаление»"
     }
   ]
 }
