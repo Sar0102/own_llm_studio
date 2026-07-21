@@ -142,10 +142,13 @@ with `/` → `__` (e.g. `developer-guide__index.md`, `architecture__resources__s
    is written, no further listing calls are made anywhere in the run.
 4. From the manifest derive two work lists:
    - **documents**: the distinct folders under `documentation/documents` that contain an `index.md`
-     (e.g. `documentation/documents/about`, `.../architecture`, …). **One worker per folder — not per
-     file.** A document is `index.md` plus the fragment `.md` files it includes; validating a fragment
-     on its own is meaningless (it holds one section, and the worker would report every other section
-     as missing). This keeps the run to ~12 workers instead of ~100.
+     **and whose type has a graph file** `<skill_dir>/graph/<doc_type>.yaml`. **One worker per folder
+     — not per file.** A document is `index.md` plus every file it links to (chapters and, via
+     "Содержание", sub-sections). **Skip folders with no matching graph file** — e.g. `what-is-new`
+     and other extra documents not defined in the graph get **no worker at all** (do not validate
+     what the graph doesn't define). To know the valid types, `ls <skill_dir>/graph/` — each
+     `<name>.yaml` except `edges.yaml` is a known type (also honour `aliases:` inside those files).
+     This keeps the run to ~12 workers instead of ~100.
    - **scan targets**: every file under any `resources/` folder (`**/resources/*`) with extensions
      `.png .jpg .jpeg .gif .bmp .webp .svg .drawio` → **dedupe by path** → one scanner each.
 5. Create the tmp directories (`files/`, `edges/`, `scans/`).
@@ -215,8 +218,9 @@ The run produces **two independent reports** — do not mix their issues:
 **Report A — consistency** (`{workspace_path}/reports/consistency-validator.json`):
 1. `glob` `.../files/*.json` and `.../edges/*.json`, `read_file` each.
 2. Concatenate their `issues` plus your own Phase 2/3a issues (`CVAL-DEP`, `CVAL-LINK`, `CVAL-WORKER`).
-3. Deduplicate (`code` + `path` + `message`); sort by severity (`ERROR` → `WARNING` → `SUGGESTION`
-   → `INFO`), then `path`.
+3. Deduplicate (`code` + `path` + `message`); sort by severity (`ERROR` → `WARNING`), then `path`.
+   The report holds **only ERROR and WARNING** — subagents no longer emit INFO/SUGGESTION, but if any
+   slip through, drop them.
 4. `write_file` with `"title": "Согласованность документации"`.
 
 **Report B — sensitive data in images** (`{workspace_path}/reports/image-validator.json`):
