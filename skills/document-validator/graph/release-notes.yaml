@@ -31,6 +31,8 @@ sections:
   - name: Известные проблемы
     markers:
     - manual
+    flags:
+    - cond
   - name: Изменения в параметрах установки и настройки
     markers:
     - manual
