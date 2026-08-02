@@ -135,6 +135,8 @@ edges:
     section: Диаграммы последовательностей
   requires:
     section: Компоненты
+  rule: Диаграммы последовательностей — графическое представление реализации каждого use case. Диаграмма
+    должна содержать компоненты продукта (раздел «Компоненты») и акторов use case диаграммы.
 - id: E-INC-4
   type: include
   code: CVAL-INC-X
@@ -231,7 +233,7 @@ edges:
   code: CVAL-LOGIC
   scope: cross-doc
   group: GRP-SCEN
-  symmetric: true
+  symmetric: false
   a:
     doc: about
     section: Варианты и сценарии использования
@@ -240,7 +242,10 @@ edges:
     doc: architecture
     section: Диаграммы последовательностей
     fact: scenario_names
-  rule: Каждому use case соответствует диаграмма последовательностей.
+  rule: 'Для каждого сценария использования из «Варианты и сценарии использования» должна быть приведена
+    диаграмма последовательностей. Диаграмма должна содержать компоненты продукта, акторов use case диаграммы
+    и названия операций из «Программные интерфейсы». Покрытие: сценарий без диаграммы — находка; лишние
+    диаграммы — нет.'
 - id: E-LOG-5
   type: logical
   code: CVAL-LOGIC
@@ -260,29 +265,34 @@ edges:
   code: CVAL-LOGIC
   scope: cross-doc
   group: GRP-SCEN
-  symmetric: true
+  symmetric: false
   a:
     doc: administration-guide
     section: Сценарии администрирования
     fact: scenario_names
   b:
     doc: about
-    section: Сценарий использования
+    section: Варианты и сценарии использования
     fact: scenario_names
+  rule: 'Покрытие: каждый сценарий из «Сценарии администрирования» Руководства администратора должен присутствовать
+    в «Варианты и сценарии использования» документа «Описание». Обратное не требуется — в Описании могут
+    быть и другие сценарии.'
 - id: E-LOG-7
   type: logical
   code: CVAL-LOGIC
   scope: cross-doc
   group: GRP-SCEN
-  symmetric: true
+  symmetric: false
   a:
     doc: user-guide
     section: Использование приложения
     fact: scenario_names
   b:
     doc: about
-    section: Сценарий использования n
+    section: Варианты и сценарии использования
     fact: scenario_names
+  rule: 'Покрытие: каждый сценарий из «Использование приложения» Руководства пользователя должен присутствовать
+    в «Варианты и сценарии использования» документа «Описание». Обратное не требуется.'
 - id: E-LOG-8
   type: logical
   code: CVAL-LOGIC
@@ -366,6 +376,117 @@ edges:
     doc: security-guide
     section: Настройки параметров безопасности
     fact: section_digest
+- id: E-DEP-5
+  type: dependency
+  code: CVAL-DEP
+  scope: cross-doc
+  group: GRP-DEP
+  symmetric: false
+  a:
+    doc: agent-guide
+    fact: presence
+  b:
+    doc: about
+    section: Совместимость с выпущенными клиентами
+    fact: section_digest
+  rule: Если в комплекте документации есть документ agent-guide И файл `agent.json`, то секция «Совместимость
+    с выпущенными клиентами» в документе «Описание» должна быть заполнена. Пустая или отсутствующая секция
+    при наличии agent-guide + agent.json → находка. Если agent-guide отсутствует — ребро не проверяется.
+- id: E-INC-5
+  type: include
+  code: CVAL-INC-IN
+  scope: intra-doc
+  doc: architecture
+  a:
+    section: Компонентно-логическая диаграмма
+  requires:
+    section: Компоненты
+  rule: Акторы на компонентно-логической диаграмме должны соответствовать «Варианты и сценарии использования»
+    Описания, компоненты — разделу «Компоненты». Компоненты продукта должны быть в явном виде ограничены
+    отдельным прямоугольником, прочие акторы — за его пределами.
+- id: E-LOG-14
+  type: logical
+  code: CVAL-LOGIC
+  scope: cross-doc
+  group: GRP-ARCH
+  symmetric: false
+  a:
+    doc: architecture
+    section: Сценарии отказа
+    fact: component_list
+  b:
+    doc: architecture
+    section: Компоненты
+    fact: component_list
+  rule: Сценарии отказа должны быть приведены не только для продукта, но и для его компонентов. Компонентный
+    состав «Сценарии отказа» должен соответствовать «Компоненты программного продукта» и компонентно-логической
+    диаграмме. Если компенсирующих мер нет — должно быть указано «не предусмотрено».
+- id: E-LOG-15
+  type: logical
+  code: CVAL-LOGIC
+  scope: cross-doc
+  group: GRP-SCEN
+  symmetric: false
+  a:
+    doc: architecture
+    section: Взаимодействия
+    fact: item_names
+  b:
+    doc: about
+    section: Варианты и сценарии использования
+    fact: scenario_names
+  rule: В таблице взаимодействий должны быть отражены все взаимодействия внутри продукта. Взаимодействия
+    не должны противоречить «Варианты и сценарии использования» Описания.
+- id: E-SPO-5
+  type: spo
+  code: CVAL-SPO
+  scope: cross-doc
+  group: GRP-SPO
+  symmetric: false
+  a:
+    doc: about
+    section: Необходимое программное обеспечение
+    fact: spo_list
+  b:
+    doc: deployment
+    section: Типовые варианты развертывания
+    fact: spo_list
+  rule: 'На диаграммах развертывания должны быть отражены ВСЕ интеграции из раздела «Необходимое программное
+    обеспечение» секции «Системные требования» Описания. Покрытие: всё, что есть в СПО, должно быть на
+    диаграмме, и всё, что на диаграмме, должно быть в СПО. Частный случай: если есть диаграмма развертывания
+    в K8S — в СПО обязательно должен быть указан кубер или Platform V Dropapp.'
+- id: E-SPO-6
+  type: spo
+  code: CVAL-SPO
+  scope: cross-doc
+  group: GRP-SPO
+  symmetric: false
+  a:
+    doc: installation-guide
+    section: Установка
+    fact: spo_list
+  b:
+    doc: about
+    section: Необходимое программное обеспечение
+    fact: spo_list
+  rule: Всё ПО, описанное в Руководстве по установке, должно быть отражено на Диаграммах развертывания
+    и, следовательно, в «Необходимое программное обеспечение» Описания. Если основной способ установки
+    — автоматизированная установка с Platform V DevOps Tools, в «Необходимое программное обеспечение»
+    и в секции «Установка» должны быть указаны компонент Delivery Tools (DTDS) продукта Platform V DevOps
+    Tools (DOT) как инструмент распаковки дистрибутива и компонент Deploy tools (CDJE) как инструмент
+    автоматизированной установки.
+- id: E-INC-6
+  type: include
+  code: CVAL-INC-IN
+  scope: intra-doc
+  doc: architecture
+  a:
+    section: Диаграммы последовательностей
+  requires:
+    section: Программные интерфейсы
+  rule: Диаграмма последовательностей должна содержать названия операций из секции «Программные интерфейсы».
+    Операции, показанные на диаграмме, должны присутствовать в «Программные интерфейсы»; отсутствие соответствия
+    — находка.
 version_check:
   group: GRP-VER
   code: CVAL-VER
@@ -383,6 +504,8 @@ edge_groups:
     - E-SPO-4
     - E-INC-4
     - N-INST-1
+    - E-SPO-5
+    - E-SPO-6
     docs:
     - about
     - installation-guide
@@ -406,6 +529,7 @@ edge_groups:
     - E-LOG-1
     - E-LOG-5
     - N-SEC-1
+    - E-LOG-14
     docs:
     - architecture
     - security-guide
@@ -418,6 +542,7 @@ edge_groups:
     - E-LOG-6
     - E-LOG-7
     - E-LOG-8
+    - E-LOG-15
     docs:
     - about
     - architecture
@@ -442,3 +567,9 @@ edge_groups:
     - administration-guide
     - release-notes
     - pmi
+  GRP-DEP:
+    edges:
+    - E-DEP-5
+    docs:
+    - agent-guide
+    - about

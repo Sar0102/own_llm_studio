@@ -16,3 +16,7 @@ sections:
 - name: Обновление
 - name: Удаление
 - name: Часто встречающиеся проблемы и пути их устранения
+facts_to_extract:
+  __doc__:
+    fact: presence
+    spec: true/false — раздел или документ присутствует.
