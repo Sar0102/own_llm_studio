@@ -31,11 +31,10 @@ REPO: https://portal.works.prod.sbt/ssd/tools/sc/pvm/pegas-doc BRANCH: release/6
 skill_dir: /Users/<...>/skills/document-validator
 doc_type: about
 output_path: /tmp/document-validator/files/about.json
-manifest_path: /tmp/document-validator/manifest.json
 ```
 
 `doc_type` tells the worker which graph file to read (`<skill_dir>/graph/<doc_type>.yaml`) — pass it
-always. Every path (`skill_dir`, `output_path`, `manifest_path`) must be **absolute**.
+always. Every path (`skill_dir`, `output_path`) must be **absolute**.
 
 ## TWO SEPARATE TOOL FAMILIES — never mix them
 
@@ -89,7 +88,7 @@ If anything in this file disagrees with the graph files, the graph files win.
 
 | Subagent (`name`) | Unit of work | Reads | Writes |
 |---|---|---|---|
-| `document-validator-worker` | one **document folder** (index.md + linked files) | its files + `graph/<doc_type>.yaml` + manifest | `files/<doc_type>.json` |
+| `document-validator-worker` | one **document folder** (index.md + linked files) | its files + `graph/<doc_type>.yaml` | `files/<doc_type>.json` |
 | `document-validator-edge-checker` | one edge group | `graph/edges.yaml` + that group's facts files | `edges/<group_id>.json` |
 
 ## Paths
@@ -120,8 +119,9 @@ If anything in this file disagrees with the graph files, the graph files win.
    file contents; use the recursive listing from the root — do not fan out per-directory listings).
    If `documentation/documents` does not exist — stop and report no documents folder.
 3. Write **`manifest.json`**: a flat JSON array of every repo-relative file path under
-   `documentation/`. The manifest is the single existence-check source for all subagents — after it
-   is written, no further listing calls are made anywhere in the run.
+   `documentation/`. You use it yourself to know which document folders exist and to resolve the
+   doc-existence edges in Phase 3a. Workers do **not** receive it — this skill does not validate link
+   targets (a separate deterministic validator does that).
 4. Derive the **documents** work list: the distinct folders under `documentation/documents` that
    contain an `index.md` **and whose type has a graph file** `<skill_dir>/graph/<doc_type>.yaml`.
    **One worker per folder — not per file.** A document is `index.md` plus every file it links to
@@ -135,7 +135,7 @@ If anything in this file disagrees with the graph files, the graph files win.
 
 Emit, in ONE turn, a spawn call for every **document folder** from the work list. Each task
 description begins with its `REPO:/BRANCH:/DOC:` line (see the top of this file), then carries
-`skill_dir`, `doc_type`, `output_path` = `.../files/<doc_type>.json`, and `manifest_path`.
+`skill_dir`, `doc_type` and `output_path` = `.../files/<doc_type>.json`.
 
 Do not wait between spawns.
 
@@ -220,7 +220,7 @@ Write with `write_file`. Do not modify issue contents during merge — only conc
 1. Never read document content; never read facts files whole — only path lists, statuses, and the
    single `presence` flags for Phase 3a.
 2. One worker = one document folder; one edge-checker = one group.
-3. File existence is checked **only** against `manifest.json` — no probe fetches.
+3. Link-target validation is **out of scope** for this skill — neither you nor the workers report broken links, includes or missing referenced files.
 4. Spawn each wave as a single parallel batch; never serialize spawns.
 5. Read subagent results **from disk after they finish**, never from their chat replies.
 6. Skip document folders whose type is not defined in `graph/` — no worker, no findings.

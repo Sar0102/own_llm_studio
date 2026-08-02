@@ -40,9 +40,6 @@ document-validator/
 | `CVAL-NEST` | [W] | Подраздел присутствует, но не под тем родителем | WARNING | Подраздел «{subsection}» расположен не под «{parent}» в `{doc}` ({position}). |
 | `CVAL-COND` | [W] | Условный/автогенерируемый раздел отсутствует (зависит от СПО/скоупа/генерации) | WARNING | Условный раздел «{section}» отсутствует в `{doc}` — зависит от {reason}, не ошибка. |
 | `CVAL-UML-IMG` | [W] | Ожидается UML-блок, вместо него изображение | WARNING | В разделе «{section}» (`{doc}`, {position}) ожидается блок-кода UML, присутствует изображение. |
-| `CVAL-INC` | [W] | Цель `include` не найдена в манифесте репозитория | ERROR | `include` из «{section}» (`{doc}`) ссылается на `{target}` — файла нет в манифесте репозитория. |
-| `CVAL-REF` | [W] | Внутренняя/внутрирепозиторная ссылка не разрешается | ERROR | Ссылка на `{target}` из «{section}» (`{doc}`, {position}) не разрешается: файла нет в манифесте. |
-| `CVAL-PATH` | [W] | Ссылка/include с неверным путём — файл существует в другом месте | WARNING | Ссылка на `{target}` из «{section}» (`{doc}`, {position}) указывает неверный путь — файл существует по `{actual_path}`. |
 | `CVAL-INC-IN` | [W] | Внутридокументное включение: раздел не опирается на требуемый раздел | WARNING | Раздел «{section}» (`{doc}`) должен опираться на «{required_section}», но не содержит его. |
 | `CVAL-NOTE` | [W]/[E] | Нарушено требование примечания (note) графа | WARNING | Не выполнено требование примечания графа для «{section}» (`{doc}`): {note}. |
 | `CVAL-SPO` | [E] | Перечень СПО не совпадает между документами | ERROR | Перечень СПО не совпадает: «{sectionA}» (`{docA}`, {positionA}) ↔ «{sectionB}» (`{docB}`, {positionB}); расхождение: {diff}. |
@@ -78,8 +75,7 @@ document-validator/
 | `{value}` | Конкретное значение | дерево/`facts` | в «ёлочках» если текст | «D-6.0.0» |
 | `{valueA}` / `{valueB}` | Значения сторон A/B (версии, элементы) | `facts` сторон | в «ёлочках» | «6.0.0» |
 | `{target}` | Цель `include`/ссылки (путь/файл) | сам `include`/ссылка | в backticks | `../about/system-requirements.md` |
-| `{actual_path}` | Фактический путь файла из манифеста (для `CVAL-PATH`) | манифест (поиск по basename) | в backticks | `documentation/documents/about/system-requirements.md` |
-| `{required_section}` | Раздел, на который должен опираться (для `CVAL-INC-IN`) | `graph.yaml` (edges scope: intra-doc, поле `requires`) | в «ёлочках» | «Компоненты» |
+| `{required_section}` | Раздел, на который должен опираться (для `CVAL-INC-IN`) | `graph/<doc_type>.yaml` (edges scope: intra-doc) | в «ёлочках» | «Компоненты» |
 | `{required_doc}` | Документ, который должен существовать (для `CVAL-DEP`) | `graph.yaml` (edges type: dependency) | в backticks | `agent-guide` |
 | `{trigger_section}` | Раздел-триггер зависимости (для `CVAL-DEP`) | `facts` architecture | в «ёлочках» | «Элементы развертывания» |
 | `{metadata_file}` | Имя файла метаданных (для `CVAL-META`) | `graph.yaml`/`metadata` | в backticks | `db-models.json` |
@@ -90,7 +86,7 @@ document-validator/
 
 ### Правила подстановки и оформления
 
-- **Пути и идентификаторы** (`{doc}`, `{docA}`, `{docB}`, `{target}`, `{actual_path}`, `{required_doc}`, `{metadata_file}`),
+- **Пути и идентификаторы** (`{doc}`, `{docA}`, `{docB}`, `{target}`, `{required_doc}`, `{metadata_file}`),
   а также JSON-ключи и технические термины — в backticks.
 - **Названия разделов** (`{section}`, `{subsection}`, `{parent}`, `{required_section}`, `{trigger_section}`) — в «ёлочках»,
   в **каноничном написании из `graph.yaml`** (с пробелами и дефисами, без подчёркиваний).

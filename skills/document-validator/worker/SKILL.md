@@ -1,6 +1,6 @@
 ---
 name: document-validator-worker
-description: Worker for parallel documentation validation. Receives ONE document folder (index.md plus its fragment files), assembles the full section tree, validates it against that doc type's graph file, checks includes and references against the repository manifest, extracts cross-document facts, and writes a per-document JSON to disk. Invoked by the document-validator-orchestrator.
+description: Worker for parallel documentation validation. Receives ONE document folder (index.md plus its fragment files), assembles the full section tree, validates it against that doc type's graph file, extracts cross-document facts, and writes a per-document JSON to disk. Invoked by the document-validator-orchestrator.
 ---
 
 # Document Validator — Worker
@@ -16,7 +16,6 @@ errors.
 **Turn 1 — start at the entry point (parallel):**
 1. `get_single_file(repository_url, branch, <DOC>/index.md)` — the document's table of contents.
 2. `read_file(<skill_dir>/graph/<doc_type>.yaml)` — the expected section tree (small file).
-3. `read_file(<manifest_path>)` — the repo file list (or `grep` it later if huge).
 
 **Turn 2 — follow the links and pull in the whole document:**
 4. Collect every **in-repo link** from `index.md` and from any "Содержание" / contents list inside
@@ -43,10 +42,9 @@ task line **verbatim**. Never give them a local path or a `file:///...` URL — 
 `Unsupported URL format`.
 
 **Local disk:** `read_file`, `write_file`, `glob`, `grep`, `ls` — **absolute** paths starting with
-`/`. Use these for `<skill_dir>/graph/<doc_type>.yaml`, the manifest, and `output_path`.
+`/`. Use these for `<skill_dir>/graph/<doc_type>.yaml` and `output_path`.
 
-Existence of include/reference targets is checked **against the manifest** (a local file), never by
-probe fetches. There is no shell tool: never write or run scripts.
+The write tool is used once, for `output_path`. There is no shell tool: never write or run scripts.
 
 ## Input (from orchestrator)
 
@@ -64,7 +62,6 @@ Parse the three values and use them verbatim. `DOC:` is a **folder** (e.g.
 | `skill_dir` | **Absolute** path to the skill root. Read `<skill_dir>/graph/<doc_type>.yaml` — do not search for it |
 | `doc_type` | Your document type (`about`, `architecture`, …). Names the graph file you read |
 | `output_path` | **Absolute** path where you write your result JSON |
-| `manifest_path` | **Absolute** path to `manifest.json` — every repo-relative file path under `documentation/` |
 
 You are only spawned for document types that exist in the graph (the orchestrator skips unknown
 folders). If you nonetheless find no graph file for your `doc_type`, write an empty result
@@ -105,7 +102,7 @@ that didn't exist in this version is simply **not written to the output**, not r
 | Section flagged `gen` (auto-generated) | do **not** flag as missing |
 | Section present via a linked file | counts as **present** |
 | Marker `uml` but a real raster image instead of a diagram | `WARNING` (`CVAL-UML-IMG`) |
-| Entries under `files` (`lib.json`, `agent.json`, …) | **files, not headings** — check via manifest; never `CVAL-SEC` |
+| Entries under `files` (`lib.json`, `agent.json`, …) | **files, not headings** — never emit `CVAL-SEC` for them |
 
 A `.drawio` file, a `.puml`/PlantUML block, or an embedded editable diagram **satisfies** marker
 `uml` — it is a UML diagram, not "an image". Only a plain raster screenshot (`.png`/`.jpg`) where a
@@ -121,9 +118,6 @@ at a `.drawio` is a diagram — do not flag it.
 | `CVAL-NEST` | WARNING | Subsection under the wrong parent | Подраздел «{subsection}» расположен не под «{parent}» в `{doc}` ({position}). |
 | `CVAL-COND` | WARNING | Conditional section absent | Условный раздел «{section}» отсутствует в `{doc}` — зависит от {reason}, не ошибка. |
 | `CVAL-UML-IMG` | WARNING | Raster image instead of a diagram | В разделе «{section}» (`{doc}`, {position}) ожидается UML-диаграмма, присутствует растровое изображение. |
-| `CVAL-INC` | ERROR | `include` target not in manifest | `include` из «{section}» (`{doc}`) ссылается на `{target}` — файла нет в манифесте репозитория. |
-| `CVAL-REF` | ERROR | Reference not in manifest | Ссылка на `{target}` из «{section}» (`{doc}`, {position}) не разрешается: файла нет в манифесте. |
-| `CVAL-PATH` | WARNING | Wrong path, file exists elsewhere | Ссылка на `{target}` из «{section}» (`{doc}`, {position}) указывает неверный путь — файл существует по `{actual_path}`. |
 | `CVAL-INC-IN` | WARNING | Intra-doc edge unsatisfied | Раздел «{section}» (`{doc}`) должен опираться на «{required_section}», но не содержит его. |
 | `CVAL-NOTE` | WARNING | Intra-doc note violated | Не выполнено требование примечания графа для «{section}» (`{doc}`): {note}. |
 
@@ -132,31 +126,20 @@ file. `{doc}` always starts with `documentation/` and names the **file** the fin
 or the fragment). Drop `({position})` entirely when the position is unknown — never write `(null)`.
 `advice`: imperative, one action, else `null`. Text never changes severity.
 
-## Which links to check (only same-repo, same-branch) — and which to skip
+## Links: follow them, never validate them
 
-Two kinds of links must be handled differently:
+Links exist in this skill for **one purpose only** — to assemble the document (follow them from
+`index.md` and "Содержание" to pull in chapter and sub-section files).
 
-- **Structural links** — the contents lists in `index.md` and "Содержание" that point to chapter and
-  sub-section files of THIS document. You **follow** these to assemble the document (see above). They
-  are never "broken reference" findings; they are how the document is built.
-- **Plain references** in body text — these are what you check for existence, but **only** if they
-  point inside the same repository and branch. Everything else is out of scope: do **not** flag it.
+**You do NOT check whether link targets exist.** Broken-link checking is done by a separate
+deterministic validator, not here. Never emit a finding about a missing or unresolvable link,
+`include` target, image path, or referenced file — no matter how the link looks or where it points
+(other product folders like `CRDN`/`FSGW`/`MFEX`, external URLs, anything). If a link target cannot
+be fetched while assembling the document, just skip that file silently and validate what you did
+assemble.
 
-**Skip (never emit CVAL-INC/CVAL-REF) when the link is:**
-- an external URL — any `http://` or `https://` to another host (e.g. `docs.sbt/...`,
-  `portal.works.prod.sbt/...`). Not your repository, not your concern.
-- a link into a **different repository or branch** than the one you were given (`REPO:` / `BRANCH:`).
-- a pure `#anchor` (same-page link) or a `mailto:`.
-- an external/generated resource: `/info/*.json`, `required-software.json`, `rn-*.json`.
-
-**Check only** links that resolve to a file **in this repo** under `documentation/`:
-a. Normalize: strip `#anchor` and `?query` (e.g. `?display=source`); drop leading `./`; resolve `../`
-   relative to the containing file's directory; express repo-relative with the `documentation/` prefix.
-b. Exact match in the manifest → the target exists, nothing to report.
-c. No exact match → look up the basename in the manifest (`grep` it): found elsewhere → `CVAL-PATH`
-   (WARNING); found nowhere → `CVAL-REF` / `CVAL-INC` (ERROR).
-d. Never verify existence with `get_single_file` — a network error is indistinguishable from a
-   missing file and produces false ERRORs.
+Your findings are about **structure and content**: missing sections, wrong nesting, conditional
+sections, diagrams, intra-document notes. Nothing about link health.
 
 ## Intra-doc edges & notes
 
@@ -217,7 +200,7 @@ technical terms and identifiers stay in English.
    `get_multiple_files` (fragments). No probe fetches, no re-reads.
 2. Judge sections against the **assembled** tree, never against one fragment.
 3. Apply the Severity & Conditionality table before emitting any issue.
-4. Include/reference existence — manifest only, with basename fallback.
+4. Never validate link targets — link checking is out of scope for this skill.
 5. Do not read images or other binary files — this skill validates structure only.
 6. No cross-document comparison; extract facts only.
 7. Always `write_file` to `output_path` (empty `issues` if clean); reply is one confirmation line.
