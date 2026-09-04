@@ -1,200 +1,270 @@
 ---
 name: document-validator-orchestrator
-description: Orchestrator for parallel documentation consistency validation. Discovers the document folders under documentation/documents, builds a repository manifest, dispatches one worker PER DOCUMENT FOLDER (parallel batch), then dispatches edge-checkers for the cross-document consistency groups in graph/edges.yaml, and merges every subagent's on-disk result into consistency-validator.json. Does not scan images — that is a separate skill.
+description: Orchestrator for parallel documentation validation. Discovers every markdown file under documentation/documents, dispatches one worker PER FILE (parallel batches), then runs cross-document consistency checks from the workers' extracted facts and merges everything into consistency-validator.json.
 ---
 
 # Document Validator — Orchestrator
 
-## HOW TO SPAWN A SUBAGENT (read first — the task text carries all the data)
+## Overview
 
-A subagent starts with a blank context. It sees **only the task description you write** — nothing
-from your context, no separate parameters, no repository URL, no path unless you put them in the
-task text. Every worker task description **must begin with this exact line**:
+Coordinates documentation validation with **per-file** granularity. Each markdown file is handed
+to its own worker (a section may hold many large files, so files are validated one at a time to
+keep each worker's context bounded). The orchestrator then performs the **cross-document** checks
+that no single-file worker can do — using the compact `facts` each worker extracted — and assembles
+the final report.
 
+Per-file validation logic (required sections, includes, references, notes, severity rules) lives
+in the **worker** skill (`document-validator-worker`). The orchestrator owns discovery, dispatch,
+cross-document consistency, and merge.
+
+## Source Graph (canonical — single source of truth)
+
+Validation MUST follow this graph. It is authoritative for document types, required sections (with
+nesting and `Table`/`UML`/`ссылка`/`рукописный` markers), notes, and **every** consistency edge.
+If anything in this skill ever disagrees with the graph below, the graph wins. Intra-document edges
+(both endpoints in the same document) are validated by the **worker**; cross-document edges (Phase 3)
+by the orchestrator.
+
+```plantuml
+@startuml
+left to right direction
+skinparam Shadowing false
+
+legend
+Легенда:
+==== color:red --- color:black : Перечень СПО должен совпадать
+==== color:blue --- color:black : Логические связи и консистентность контента
+==== color:green --- color:black : Включение части контента одного раздела в другой
+==== color:orange --- color:black : Контент в виде ссылки
+==== color:blue --> color:black : Наличие документов и разделов зависит от компонентного состава
+end legend
+
+object "Описание" as about << document >> {
+  Назначение / Преимущества / Системные_требования
+  ___Необходимое_программное_обеспечение (АС Документация Сотрудники) / ___Аппаратное_обеспечение (Table)
+  Типовые_решения / ___Типовое_решение
+  Концептуальная_модель_предметной_области (UML) / Основные_функции (Table)
+  Варианты_и_сценарии_использования (UML) / ___Сценарий_использования / ___Сценарий_использования_n
+  Нефункциональные_особенности / Совместимость_с_выпущенными_клиентами
+}
+object "Детальная архитектура" as ar1 << document >> {
+  Структура
+  ___Компонентно_логическая_диаграмма (UML) / ___Компоненты (Table) / ___Программные_интерфейсы
+  ___Схемы_структур_данных / ___Физические_модели_баз_данных / ___Элементы_развертывания (Table)
+  ___Диаграммы_развертывания (ссылка)
+  Поведение / ___Взаимодействия (Table) / ___Диаграммы_последовательностей (UML)
+  ___Механизмы_безопасности / ___Прочие_поведенческие_механизмы
+  Прочие_аспекты / ___Сценарии_отказа (Table)
+}
+object "Диаграммы развертывания" as dd << document >> { Типовые_варианты_развертывания / ___Вариант_развертывания }
+object "Руководство по установке <installation-guide>" as inst << document >> {
+  Подготовка_окружения / ___Подготовка_элементов_развертывания / ___Настройка_окружения / ___Выпуск_и_подготовка_сертификатов
+  Установка / ___Порядок_установки / ___Настройка_интеграции
+  Чек_лист_проверки_корректности_работы
+  Обновление / ___Изменения_в_системных_требованиях / ___Изменения_в_параметрах_настройки
+  Откат / Удаление / Часто_встречающиеся_проблемы_и_пути_их_устранения
+}
+object "Руководство администратора <administration-guide>" as admin << document >> {
+  Сценарии_администрирования / ___Как_определить_версию_продукта / ___Сценарий_администрирования
+  Системный_журнал / ___Настройка_системного_журнала / ___Доступ_к_системному_журналу / ___Основные_события
+  Мониторинг / ___Настройка / ___Метрики (Table)
+  Часто_встречающиеся_проблемы_и_пути_их_устранения
+}
+object "Руководство прикладного администратора <agent-guide>" as agent << document >> {
+  Общие_сведения (АС Документация Сотрудники) / agent.json
+  Установка / ___Порядок_установки / Обновление / Удаление / Часто_встречающиеся_проблемы_и_пути_их_устранения
+}
+object "Руководство пользователя <user-guide>" as user << document >> {
+  Доступ_к_приложению / ___Запуск_приложения / ___Вход_и_выход / ___Порядок_доступа / ___Роли_пользователей (Рукописный)
+  Использование_приложения / ___Сценарий_использования / ___Как_определить_версию_продукта
+  Настройка_приложения / Часто_встречающиеся_проблемы_и_пути_их_устранения
+}
+object "Руководство прикладного разработчика <developer-guide>" as dev << document >> {
+  Общие_сведения (АС Документация Сотрудники) / lib.json
+  Подключение_и_конфигурирование / Миграция_на_текущую_версию / Быстрый_старт (ссылка на example.zip)
+  Использование / ___Сценарий_использования / Часто_встречающиеся_проблемы_и_пути_их_устранения
+}
+object "Руководство по безопасности <security-guide>" as secure << document >> {
+  Идентификация_и_аутентификация / Авторизация / Безопасность_данных / Сетевая_безопасность
+  Управление_ключами_и_сертификатами (Table) / Аудит (Table)
+  Правила_эксплуатации / Настройки_параметров_безопасности / Чек-лист_валидации_настройки_механизмов_безопасности
+}
+object "Программа и методика испытаний <pmi>" as pmi << document >> {
+  Объект_испытаний_и_требования (АС Документация Сотрудники) / Методы_испытаний (АС Документация Сотрудники)
+  ___Изменение_функциональности / ___Исправленные_ошибки / ___Регрессионные_тесты
+}
+object "Примечания к релизу <release-notes>" as rn << document >> {
+  Секция_версии_продукта / ___Компонентный_состав / ___Изменение_функциональности / ___Исправленные_ошибки / ___Устраненные_уязвимости
+  ___Обратная_совместимость (рукописный) / ___Известные_проблемы (рукописный) / ___Изменения_в_параметрах_установки_и_настройки (рукописный) / ___Изменения_в_документации (рукописный)
+}
+object "Метаданные <info>" as info << info >> { db-models.json / deployment-units.json }
+
+' === Notes ===
+' about: в Основных функциях перечисляются только сущностные функции; полный перечень — в «Варианты и сценарии использования»
+' ar1: компонентно-логическая диаграмма основана на Компоненты/Варианты и сценарии(акторы)/Программные интерфейсы/Взаимодействия
+' ar1: диаграммы последовательностей = графическое представление каждого use case
+' inst: СПО в Руководстве по установке отражается на Диаграммах развертывания и в Системных требованиях
+' agent: при наличии отдельных элементов развертывания (sidecar, агент)
+' user: при наличии интерфейса взаимодействия конечного пользователя (веб-консоль, приложение, CLI)
+' dev: при наличии библиотеки (клиентский модуль, фреймворк)
+' secure: сведения по ключам/сертификатам коррелируют с Безопасность данных/Сетевая безопасность/Компонентно-логическая диаграмма/Взаимодействия/Диаграммы развертывания
+
+' === Edges (Зависимость, blue dashed) ===
+agent -[#blue,dashed]-> about::Совместимость_с_выпущенными_клиентами
+ar1::___Элементы_развертывания -[#blue,dashed]-> agent
+ar1::___Программные_интерфейсы -[#blue,dashed]-> user
+
+' === Edges (СПО, red) ===
+about::Системные_требования -[#red]-> inst::Чек_лист_проверки_корректности_работы
+about::Системные_требования -[#red]-> dd::___Вариант_развертывания
+about::Системные_требования -[#red]-> secure::Настройки_параметров_безопасности
+about::Системные_требования -[#red]-> ar1::___Сценарии_отказа
+
+' === Edges (Включение, green) ===
+ar1::___Программные_интерфейсы -[#green]-> ar1::___Компоненты
+ar1::___Сценарии_отказа -[#green]-> ar1::___Компоненты
+ar1::___Сценарии_отказа -[#green]-> about::___Необходимое_программное_обеспечение
+ar1::___Диаграммы_последовательностей -[#green]-> ar1::___Компоненты
+
+' === Edges (Ссылка, orange) ===
+ar1::___Диаграммы_развертывания -[#orange]-> dd : ссылка на Диаграммы развертывания
+
+' === Edges (Логическая, blue) ===
+dd::___Вариант_развертывания -[#blue]-> info::deployment-units.json
+ar1::___Физические_модели_баз_данных -[#blue]-> info::db-models.json
+ar1::___Механизмы_безопасности -[#blue]-> secure : консистентность с документом РБ
+dd::___Вариант_развертывания -[#blue]-> ar1::___Элементы_развертывания
+dd::___Вариант_развертывания -[#blue]-> ar1::___Взаимодействия
+about::Варианты_и_сценарии_использования -[#blue]-> ar1::___Диаграммы_последовательностей
+about::Нефункциональные_особенности -[#blue]-> ar1::___Механизмы_безопасности
+admin::Сценарии_администрирования -[#blue]-> about::___Сценарий_использования : консистентность сценариев
+user::Использование_приложения -[#blue]-> about::___Сценарий_использования_n : консистентность сценариев
+secure::Авторизация -[#blue]-> admin::___Сценарий_администрирования
+rn::___Изменение_функциональности <-[#blue]-> pmi::___Изменение_функциональности
+rn::___Исправленные_ошибки <-[#blue]-> pmi::___Исправленные_ошибки
+rn::___Устраненные_уязвимости <-[#blue]-> pmi::___Исправленные_ошибки
+inst::Обновление -[#blue]-> rn::___Изменения_в_параметрах_установки_и_настройки
+dd -[#blue]-> secure::Настройки_параметров_безопасности
+@enduml
 ```
-REPO: <repository_url> BRANCH: <branch> DOC: <document folder>
-```
-
-- `<repository_url>` and `<branch>` — copy verbatim from the workflow input. Never blank, never guessed.
-- `DOC:` — a **folder** (`documentation/documents/about`). The worker validates the whole document:
-  `index.md` plus every file it links to. Never point a worker at a single fragment.
-
-**Then always add `skill_dir` — an absolute path.** Subagents cannot resolve relative paths: every
-filesystem tool requires an absolute path starting with `/`. Without `skill_dir` they waste dozens of
-`glob`/`ls` calls hunting for their graph file and get killed by the execution timeout. Your own
-SKILL.md absolute path is in your Skills list; its directory is the skill root.
-
-Concrete worker example:
-
-```
-REPO: https://portal.works.prod.sbt/ssd/tools/sc/pvm/pegas-doc BRANCH: release/6.6.200 DOC: documentation/documents/about
-skill_dir: /Users/<...>/skills/document-validator
-doc_type: about
-output_path: /tmp/document-validator/files/about.json
-```
-
-`doc_type` tells the worker which graph file to read (`<skill_dir>/graph/<doc_type>.yaml`) — pass it
-always. Every path (`skill_dir`, `output_path`) must be **absolute**.
-
-## TWO SEPARATE TOOL FAMILIES — never mix them
-
-**Repository tools (remote git):** `get_file_list`, `get_single_file`, `get_multiple_files`.
-They take `repository_url` + `branch` + a **repo-relative** `file_path` (e.g.
-`documentation/documents/about/index.md`). They only reach the git repository. Never pass them a
-local path, and never a `file:///...` URL — that raises `Unsupported URL format`.
-
-**Local workspace tools (disk):** `ls`, `read_file`, `write_file`, `edit_file`, `glob`, `grep`.
-They take a single **absolute** path starting with `/` (e.g. `/tmp/document-validator/files/x.json`).
-Use these — and only these — for everything on disk: `manifest.json`, worker/checker result JSONs,
-the skill files under `skill_dir`, and the final report.
-
-Rule of thumb: repo content → repository tools. Anything under `/tmp`, `/Users`, or any local path →
-local tools. Reading `/tmp/document-validator/files/*.json` with `get_multiple_files` is always wrong;
-use `glob` + `read_file`.
-
-**Do not write or run scripts.** There is no shell tool. Never attempt `run_shell_command`, never
-generate a Python file to process results.
-
-## YOU ARE A DISPATCHER (hard constraints)
-
-- You MUST NOT read document content, build section trees, compare sections, or resolve includes
-  yourself. If you catch yourself validating a document, you have broken your role — dispatch a
-  subagent instead.
-- The ONLY way to obtain any per-document or per-group result is to **spawn the corresponding
-  subagent**. There is no fallback where you produce results directly.
-- **Spawn only the two named subagents**: `document-validator-worker` and
-  `document-validator-edge-checker`. Never delegate to `general-purpose` — it does not know this
-  skill and will improvise (write scripts, misuse tools). Anything not covered by those two
-  (discovery, manifest, doc-existence edges, merge) you do yourself.
-- All inter-agent communication is **through files on disk**. Subagents write their JSON to disk;
-  you read those files back **only after they finish**. Their chat reply is just a `written: <path>`
-  confirmation.
-- **Spawn in batches, not one-by-one.** For each wave, emit ALL spawn calls for that wave in a
-  single turn (one assistant turn containing many parallel spawn tool-calls). Do NOT spawn one
-  subagent, wait for it, then spawn the next — that serializes the whole run.
-
-## Canonical sources (skill root)
-
-- **`<skill_dir>/graph/edges.yaml`** — every cross-document consistency edge (with `scope`, `code`,
-  `group`), the fact specs, the version check and the edge groups. **This is the one you read.**
-- **`<skill_dir>/graph/<doc_type>.yaml`** — one file per document type: its section tree, markers,
-  flags, intra-doc notes and the facts its worker must extract. These are for the **workers** —
-  you never read them; you just tell each worker its `doc_type`.
-- **`<skill_dir>/error-codes.md`** — finding codes, `message` templates, placeholder rules.
-
-If anything in this file disagrees with the graph files, the graph files win.
-
-## Subagents you dispatch
-
-| Subagent (`name`) | Unit of work | Reads | Writes |
-|---|---|---|---|
-| `document-validator-worker` | one **document folder** (index.md + linked files) | its files + `graph/<doc_type>.yaml` | `files/<doc_type>.json` |
-| `document-validator-edge-checker` | one edge group | `graph/edges.yaml` + that group's facts files | `edges/<group_id>.json` |
 
 ## Paths
 
 | Purpose | Path |
 |---|---|
 | Discovery root | `documentation/documents` |
-| Repository manifest (you write) | `{workspace_path}/tmp/document-validator/manifest.json` |
-| Per-document results (workers write) | `{workspace_path}/tmp/document-validator/files/<doc_type>.json` |
-| Edge-group results (edge-checkers write) | `{workspace_path}/tmp/document-validator/edges/<group_id>.json` |
-| Final report (you write) | `{workspace_path}/reports/consistency-validator.json` |
+| Per-file results (workers write) | `{workspace_path}/tmp/document-validator/<file_id>.json` |
+| Final report (orchestrator writes) | `{workspace_path}/reports/consistency-validator.json` |
 
-`workspace_path` = `/docstorage/tmp/{{workflow.uid}}/`.
+`workspace_path` is `/docstorage/tmp/{{workflow.uid}}/`. `<file_id>` = relative path from `documents`
+with `/` replaced by `__` (e.g. `developer-guide__index.md`).
 
 ## Workflow
 
-### Phase 0: Discovery & Manifest
+### Phase 0: Discovery
 
-0. Read `repository_url` and `branch` from the workflow input, and note your **`skill_dir`**: the
-   directory containing your own SKILL.md, whose absolute path is shown in your Skills list. These
-   three values are the canonical constants for the whole run: **capture them once and pass them,
-   verbatim, into every task description you write.** Read `<skill_dir>/graph/edges.yaml` yourself
-   (edges + groups). The per-document section trees live in `<skill_dir>/graph/<doc_type>.yaml` —
-   those are for the workers, you never read them.
-1. Use the remote repository integration (source-control tool) for that `repository_url`/`branch` —
-   **do not clone locally**.
-2. Enumerate the **full file tree** under `documentation/` via **one** repository listing call (no
-   file contents; use the recursive listing from the root — do not fan out per-directory listings).
-   If `documentation/documents` does not exist — stop and report no documents folder.
-3. Write **`manifest.json`**: a flat JSON array of every repo-relative file path under
-   `documentation/`. You use it yourself to know which document folders exist and to resolve the
-   doc-existence edges in Phase 3a. Workers do **not** receive it — this skill does not validate link
-   targets (a separate deterministic validator does that).
-4. Derive the **documents** work list: the distinct folders under `documentation/documents` that
-   contain an `index.md` **and whose type has a graph file** `<skill_dir>/graph/<doc_type>.yaml`.
-   **One worker per folder — not per file.** A document is `index.md` plus every file it links to
-   (chapters and, via "Содержание", sub-sections). **Skip folders with no matching graph file** —
-   e.g. `what-is-new` and other extra documents not defined in the graph get **no worker at all**
-   (do not validate what the graph doesn't define). To know the valid types, `ls <skill_dir>/graph/`
-   — each `<name>.yaml` except `edges.yaml` is a known type (also honour `aliases:` inside them).
-5. Create the tmp directories (`files/`, `edges/`).
+1. Use the remote repository integration (source-control tool) for the provided URL — **do not clone locally**.
+2. Enumerate every `.md` file under `documentation/documents` via the repository listing/source-control tool (remote — e.g. a repo-tree / list-files call). If that path does not exist — stop and report that no documents folder found.
+3. Each file = one unit of work for one worker. The orchestrator does **not** read file content here — workers fetch it via `get_single_file`.
+4. Create `{workspace_path}/tmp/document-validator/`.
 
-### Phase 1: Wave 1 — workers (single parallel batch)
+### Phase 1: Parallel Dispatch (one worker per file)
 
-Emit, in ONE turn, a spawn call for every **document folder** from the work list. Each task
-description begins with its `REPO:/BRANCH:/DOC:` line (see the top of this file), then carries
-`skill_dir`, `doc_type` and `output_path` = `.../files/<doc_type>.json`.
+For each file, spawn a `document-validator-worker` subagent and pass:
+- `file_path` — **repository-relative** path to the file (remote; the worker reads it via `get_single_file`).
+- `doc_type` — inferred from the file's folder, if known (worker may re-infer).
+- `file_id` — sanitized relative path.
+- `output_path` — `{workspace_path}/tmp/document-validator/<file_id>.json`.
 
-Do not wait between spawns.
+Run workers in **parallel batches**. Each worker validates exactly one file and writes its own
+per-file result; workers never write the final report and never compare files.
 
-### Phase 2: Join & Completeness
+### Phase 2: Join & Completeness (блокирующий барьер)
 
-- Wait until every dispatched worker has finished.
-- Confirm the output JSON exists on disk for every dispatched document. Missing → retry once, else
-  record:
-  ```json
-  { "code": "CVAL-WORKER", "severity": "WARNING", "path": "documentation/documents/<doc>",
-    "message": "Субагент не вернул результат по `<doc>`." }
-  ```
-- Build the **facts index**: `doc_type → /…/files/<doc_type>.json` (paths only; you do not read
-  facts content, except the single `presence` flags needed in Phase 3a).
+**Оркестратор ОБЯЗАН дождаться всех воркеров. Переход к Phase 3/4 без полного набора результатов запрещён.**
+`CVAL-WORKER` — крайняя мера после исчерпания ретраев, а не реакция на «ещё не готово».
 
-### Phase 3a: Doc-existence edges (you, from the manifest)
+1. Веди явный реестр отправленных задач: `file_id → {status: pending|done|failed, attempts}`. Он и есть
+   критерий завершённости, а не факт «я разослал воркеров».
+2. Дождись возврата **каждого** субагента. Если результат воркера приходит как возвращаемое значение —
+   дождись его; если воркер пишет файл — **опрашивай** `{workspace_path}/tmp/document-validator/<file_id>.json`
+   до появления (poll с паузой), а не проверяй один раз сразу после запуска.
+3. Отсутствие файла сразу после dispatch — это **ещё не сбой**: воркер может быть в процессе. Не помечай
+   `failed` и не пиши `CVAL-WORKER`, пока задача не вышла за таймаут.
+4. Таймаут на задачу — **не менее 5 минут**; при его истечении или явной ошибке **перезапусти воркер**,
+   до **2 ретраев** (всего 3 попытки).
+5. Только если после ретраев результата нет — помечай `failed` и записывай **одну** находку `CVAL-WORKER`
+   на этот файл (см. `./error-codes.md`).
+6. Условие выхода из фазы: **нет задач в статусе `pending`** (все `done` либо `failed`). Только тогда — Phase 3.
 
-Handle `graph/edges.yaml` edges with `scope: doc-existence` — these need only the manifest plus the
-single `presence` flag of a trigger section from the architecture facts file (one narrow field read):
+Частая ошибка: батчи запускаются параллельно, а сборка стартует до их завершения — в отчёт сыплются
+ложные «Воркер не вернул результат». Барьер выше это исключает: сначала все `done`/`failed`, потом сборка.
 
-- `E-DEP-1`, `E-DEP-2`, `E-DEP-4` → `CVAL-DEP`: trigger section is non-empty but the required doc is
-  absent from the manifest → WARNING (the doc is optional, so not ERROR).
-- `E-LINK-1` → `CVAL-LINK`: the architecture link section points to `deployment`, absent from the
-  manifest → ERROR.
+### Phase 3: Cross-Document Consistency (from facts)
 
-### Phase 3b: Wave 2 — edge-checkers (single parallel batch)
+Use the per-file `facts` to validate **only the cross-document edges** of the graph (endpoints in
+different documents). Intra-document edges (e.g. `architecture::Сценарии_отказа → architecture::Компоненты`)
+are checked by the worker. Facts are **section-keyed**: `facts["<Раздел>"] = { value, section, position }`.
+For each edge compare the `value` of the two endpoint sections; on mismatch emit an issue naming
+**both** sides (file + section + line). A side whose section is absent (`value: null`) is reported per
+the severity rules (conditional → not ERROR).
 
-Edge-checkers do **not** touch the repository — they read facts files from disk. So their task text
-does **not** use the `REPO:/BRANCH:/DOC:` line; instead each task description carries the paths they
-need — all **absolute**. Emit, in ONE turn, a spawn call for every group in
-`graph/edges.yaml → edge_groups` (GRP-SPO, GRP-DEPLOY, GRP-ARCH, GRP-SCEN, GRP-RN, GRP-VER).
-For each `document-validator-edge-checker` put in the task description:
+**Зависимость (blue dashed) — наличие документа зависит от компонентного состава:**
+| Architecture content present | Required doc | Rule |
+|---|---|---|
+| `architecture::Элементы_развертывания` | `agent-guide` | есть элементы развертывания (sidecar/агент) → `agent-guide` должен существовать; иначе опционален |
+| `architecture::Программные_интерфейсы` | `user-guide` | есть интерфейсы взаимодействия → `user-guide` должен существовать; иначе опционален |
+| `agent-guide` существует | `about::Совместимость_с_выпущенными_клиентами` | наличие согласуется с разделом совместимости |
 
-- `skill_dir` — absolute path to the skill root (they read `<skill_dir>/graph/edges.yaml` and
-  `<skill_dir>/error-codes.md`; without it they hunt the filesystem and time out).
-- `group_id`.
-- `facts_paths` — map `doc_type → absolute path to facts JSON` for that group's docs only; `null` if
-  the doc is absent from the repository (the checker applies conditionality rules).
-- `output_path` = `.../edges/<group_id>.json`.
+Отсутствие опционального документа → не ERROR.
 
-Wait until every edge-checker has finished.
+**СПО (red) — `about::Системные_требования` должен совпадать / быть отражён в:**
+- `installation-guide::Чек_лист_проверки_корректности_работы`
+- `deployment::Вариант_развертывания`
+- `security-guide::Настройки_параметров_безопасности`
+- `architecture::Сценарии_отказа`
+
+**Включение (green, кросс-документное):**
+- `architecture::Сценарии_отказа` включает `about::Необходимое_программное_обеспечение`
+
+**Ссылка (orange):**
+- `architecture::Диаграммы_развертывания` → ссылка должна вести в существующий документ `deployment`
+
+**Логическая (blue) — попарная консистентность разделов:**
+| A | B |
+|---|---|
+| `deployment::Вариант_развертывания` | `metadata::deployment-units.json` |
+| `architecture::Физические_модели_баз_данных` | `metadata::db-models.json` |
+| `architecture::Механизмы_безопасности` | `security-guide` (документ РБ) |
+| `deployment::Вариант_развертывания` | `architecture::Элементы_развертывания` |
+| `deployment::Вариант_развертывания` | `architecture::Взаимодействия` |
+| `about::Варианты_и_сценарии_использования` | `architecture::Диаграммы_последовательностей` |
+| `about::Нефункциональные_особенности` | `architecture::Механизмы_безопасности` |
+| `administration-guide::Сценарии_администрирования` | `about::Сценарий_использования` |
+| `user-guide::Использование_приложения` | `about::Сценарий_использования_n` |
+| `security-guide::Авторизация` | `administration-guide::Сценарий_администрирования` |
+| `release-notes::Изменение_функциональности` | `pmi::Изменение_функциональности` |
+| `release-notes::Исправленные_ошибки` | `pmi::Исправленные_ошибки` |
+| `release-notes::Устраненные_уязвимости` | `pmi::Исправленные_ошибки` |
+| `installation-guide::Обновление` | `release-notes::Изменения_в_параметрах_установки_и_настройки` |
+| `deployment` (документ) | `security-guide::Настройки_параметров_безопасности` |
+
+**Version consistency** (cross-cutting, не ребро графа): collect the `version` fact from every
+document that declares it and compare values; on divergence emit one issue naming each side's
+file + section + line (e.g. `D-6.0.0` vs `6.0.0`).
+
+The orchestrator never inspects intra-document section trees — that is the worker's job. Apply the
+same severity/conditionality rules as the worker (conditional → not ERROR; version-aware → SUGGESTION).
+There is **no** regression-tests ↔ «Основные функции» edge in the graph — do not invent it.
 
 ### Phase 4: Merge & Write
 
-**You do this yourself.** Never delegate the merge to a subagent — and never to `general-purpose`.
-It is a few `read_file` calls and one `write_file`. Use only local tools; write no scripts.
+1. Concatenate all per-file `issues` + the cross-document issues.
+2. Deduplicate identical issues (`code` + `path` + `message`).
+3. Sort by severity (`ERROR` → `WARNING` → `SUGGESTION` → `INFO`), then by `path`.
+4. Write the final report:
 
-1. `glob` `.../files/*.json` and `.../edges/*.json`, `read_file` each.
-2. Concatenate their `issues` plus your own Phase 2/3a issues (`CVAL-DEP`, `CVAL-LINK`, `CVAL-WORKER`).
-3. Deduplicate (`code` + `path` + `message`); sort by severity (`ERROR` → `WARNING`), then `path`.
-   The report holds **only ERROR and WARNING** — subagents no longer emit INFO/SUGGESTION, but if any
-   slip through, drop them.
-4. `write_file` the report to `{workspace_path}/reports/consistency-validator.json`.
-
-If a `glob` comes back empty where results were expected, the subagents failed — do **not** silently
-produce an empty report: record a `CVAL-WORKER` issue per missing unit so the failure is visible.
-
-> **All JSON field values are serialized as strings (type `string`), even numeric ones — e.g.
-> `"priority": "15"`. `null` stays `null`.**
+> **Все значения полей в JSON сериализуются как строки (тип `string`), даже если значение числовое — например `"priority": "15"`. Значение `null` остаётся `null`.**
 
 ```json
 {
@@ -213,26 +283,57 @@ produce an empty report: record a `CVAL-WORKER` issue per missing unit so the fa
 }
 ```
 
-Write with `write_file`. Do not modify issue contents during merge — only concatenate, dedupe, sort.
+Save to `{workspace_path}/reports/consistency-validator.json`. Issue fields, severity levels and
+the `documentation/` path prefix are defined in the worker skill and preserved during merge.
 
 ## Rules
 
-1. Never read document content; never read facts files whole — only path lists, statuses, and the
-   single `presence` flags for Phase 3a.
-2. One worker = one document folder; one edge-checker = one group.
-3. Link-target validation is **out of scope** for this skill — neither you nor the workers report broken links, includes or missing referenced files.
-4. Spawn each wave as a single parallel batch; never serialize spawns.
-5. Read subagent results **from disk after they finish**, never from their chat replies.
-6. Skip document folders whose type is not defined in `graph/` — no worker, no findings.
-7. Finalize only after all subagents are accounted for (or recorded as `CVAL-WORKER`).
-8. Do not modify issue contents during merge — only concatenate, dedupe, sort.
-9. Do not scan anything outside `documentation/`. Image scanning is **not** part of this skill.
-10. All JSON field values are strings, even numeric; `null` stays `null`.
+1. The orchestrator never validates a file's sections directly — it only dispatches and merges.
+2. One worker = exactly one file (per-file granularity to bound context).
+3. Cross-document checks use workers' `facts`, never full file contents.
+4. Every cross-document/version issue names file + section + line.
+5. Finalize only after all per-file results are present (or failures recorded).
+6. Дождаться завершения **всех** воркеров (Phase 2 — блокирующий барьер с опросом и ретраями). Не начинать Phase 3/4, пока есть `pending`; `CVAL-WORKER` — только после исчерпания ретраев, никогда не из-за незавершённой задачи.
+7. Перечень обязательных секций и файлов по типам — в `./required-sections.md`; полнота набора файлов в папке типа проверяется здесь (worker её не видит).
+6. The final report is written **only** to `{workspace_path}/reports/consistency-validator.json`.
+7. Все значения полей в JSON — строки, даже числовые; `null` остаётся `null`.
 
-## Finding Writing Guidance
+## Constraints
 
-Finding text rules, codes, templates and placeholders are defined **only** in
-`<skill_dir>/error-codes.md`. Before writing any of your own findings (Phase 2/3a), open it and take
-the `code`, template and placeholder rules from there. In short: `message`/`advice` in Russian,
-technical terms in English; be specific (file + section + line); no modality or emotion; the text
-never changes severity.
+1. Do not merge until all workers completed (or accounted for).
+2. Do not modify issue contents during merge — only concatenate, dedupe, sort.
+3. Do not scan anything outside `documentation/documents`.
+
+## Finding Writing Guidance (как ИИ формулирует находки в отчёте)
+
+Rules for the text the agent writes **inside the report** — fields `message` and `advice` of every
+issue. Goal: единообразные, точные, действенные формулировки. Язык — **русский; технические термины
+и идентификаторы на английском** (`include`, `front-matter`, `deployment-units.json`, имена секций/файлов).
+
+`message` (что не так):
+- Одно-два предложения, по факту: **что** не так и **где** (документ, раздел, строка из `section`/`position`). Пример: «Раздел "Метрики (Table)" отсутствует в `administration-guide` (раздел Мониторинг, L80)».
+- Без модальности и эмоций: «отсутствует», «не совпадает», «ссылка не разрешается» — не «кажется», «возможно», «к сожалению».
+- Конкретика вместо общего: приводи имя секции/файла/связи, а не «есть проблема со структурой».
+- Для кросс-документных находок указывай **обе** стороны с координатами: «'D-6.0.0' (`installation-guide`, Версия, L4) ≠ '6.0.0' (`release-notes`, Версия, L2)».
+- Не дублируй значение секрета/чувствительных данных; не цитируй большие фрагменты — ссылайся на место.
+- Термины и идентификаторы — в backticks; русские названия разделов — как в графе.
+
+`advice` (что сделать):
+- Императив, одно действие: «Добавить раздел "Метрики (Table)" в Мониторинг», «Привести версию к формату `6.0.0`», «Заменить `ЕФС` на «фронтенд»».
+- Действенно и проверяемо; без общих советов «улучшить документацию».
+- Если правка не очевидна или зависит от продукта — `advice: null`, не выдумывать.
+
+Severity согласована с правилами (worker): реальное отсутствие → `ERROR`; `std_exception_reason`/нота → `INFO`; условный/автогенерируемый раздел → `WARNING`/skip; не было в версии → `SUGGESTION`. Текст находки **не** меняет вердикт — он только описывает его.
+
+Don't:
+- ❌ «Похоже, тут что-то не так с разделами» → ✅ «Отсутствует обязательный раздел "Откат" в `installation-guide` (L102)».
+- ❌ «Документ неполный» → ✅ «В `about` отсутствует "Варианты и сценарии использования (UML)"; из-за этого нельзя проверить полноту "Основные функции"».
+- ❌ хвалебные/извинительные вставки, вопросы к читателю, мета-комментарии о процессе.
+
+### Коды находок
+
+Коды, их значения, severity и шаблоны `message`, а также инструкция по плейсхолдерам **не
+дублируются здесь** — они определены в общем файле **`error-codes.md`**, который лежит рядом с этим
+SKILL.md в корне скилла `document-validator/` (один общий для orchestrator и worker) и доступен по
+пути **`./error-codes.md`**. Перед записью каждой находки (и при сборке отчёта) открой
+`./error-codes.md` и возьми оттуда `code`, шаблон `message` и правила подстановки плейсхолдеров.

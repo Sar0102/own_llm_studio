@@ -1,207 +1,297 @@
 ---
 name: document-validator-worker
-description: Worker for parallel documentation validation. Receives ONE document folder (index.md plus its fragment files), assembles the full section tree, validates it against that doc type's graph file, extracts cross-document facts, and writes a per-document JSON to disk. Invoked by the document-validator-orchestrator.
+description: Worker for parallel documentation validation. Receives ONE markdown file, validates its required sections, include directives, references and notes (with severity/conditionality rules), extracts cross-document facts, and writes a per-file JSON to tmp/document-validator/<file_id>.json. Invoked by the document-validator-orchestrator.
 ---
 
 # Document Validator — Worker
 
-## REQUIRED STEPS (fetch the whole document, then validate)
+## Overview
 
-You validate ONE **document**. A document is NOT one file. It is `index.md` plus the files it
-**links to** — `index.md` works like a table of contents: it links out to chapter files, and inside
-those a "Содержание" section links further to sub-section files. A section is present if it exists in
-**any** of these linked files. Judging `index.md` alone is the main cause of false "missing section"
-errors.
+Validates a **single** markdown document. One worker = one file (a section may contain many
+files, each possibly >100 lines, so files are processed one at a time to keep context bounded).
 
-**Turn 1 — start at the entry point (parallel):**
-1. `get_single_file(repository_url, branch, <DOC>/index.md)` — the document's table of contents.
-2. `read_file(<skill_dir>/graph/<doc_type>.yaml)` — the expected section tree (small file).
-
-**Turn 2 — follow the links and pull in the whole document:**
-4. Collect every **in-repo link** from `index.md` and from any "Содержание" / contents list inside
-   it — these are the chapter and sub-section files that make up the document. Resolve them
-   (see "Resolving links"), then fetch them all in **one** `get_multiple_files(repository_url,
-   branch, [paths])` call.
-5. If a fetched chapter file itself contains a "Содержание" / contents list pointing to more in-repo
-   files, collect those too and fetch them in **one** more `get_multiple_files` call. At most two
-   such link-following rounds — the document is shallow; do not recurse endlessly.
-
-**Turn 3 — assemble, validate, write:**
-6. Build ONE combined section tree from `index.md` + every file you pulled in, tracking which file
-   and line each heading came from. Validate this **assembled** tree against the graph, extract
-   facts, `write_file(<output_path>)`, reply `written: <output_path>`.
-
-Do not explore the filesystem blindly. An empty result means you skipped the fetch — that is a bug,
-not a clean document.
-
-## Tools — two separate families, never mix them
-
-**Repository (remote git):** `get_single_file(repository_url, branch, file_path)` and
-`get_multiple_files(repository_url, branch, file_paths)`. Pass `repository_url`/`branch` from the
-task line **verbatim**. Never give them a local path or a `file:///...` URL — that fails with
-`Unsupported URL format`.
-
-**Local disk:** `read_file`, `write_file`, `glob`, `grep`, `ls` — **absolute** paths starting with
-`/`. Use these for `<skill_dir>/graph/<doc_type>.yaml` and `output_path`.
-
-The write tool is used once, for `output_path`. There is no shell tool: never write or run scripts.
+The worker checks the file in isolation: required sections, `include` targets, internal/external
+references, and document notes. It does **not** perform cross-document consistency — instead it
+extracts compact **facts** (version, СПО list, components, scenarios, …) that the orchestrator
+uses for cross-document checks. The orchestrator merges everything into the final report.
 
 ## Input (from orchestrator)
 
-The task text begins with:
-
-```
-REPO: <repository_url> BRANCH: <branch> DOC: <document folder>
-```
-
-Parse the three values and use them verbatim. `DOC:` is a **folder** (e.g.
-`documentation/documents/about`), not a file. The rest of the task carries:
-
 | Param | Description |
 |---|---|
-| `skill_dir` | **Absolute** path to the skill root. Read `<skill_dir>/graph/<doc_type>.yaml` — do not search for it |
-| `doc_type` | Your document type (`about`, `architecture`, …). Names the graph file you read |
-| `output_path` | **Absolute** path where you write your result JSON |
+| `file_path` | Repository-relative path to the single `.md` file (e.g. `documentation/documents/about/index.md`) — **remote repo, NOT a local path** |
+| `doc_type` | Optional document type hint; if absent, infer it (see Document Types) |
+| `file_id` | Sanitized relative path used for the output filename (e.g. `about__index.md`) |
+| `output_path` | `{workspace_path}/tmp/document-validator/<file_id>.json` |
 
-You are only spawned for document types that exist in the graph (the orchestrator skips unknown
-folders). If you nonetheless find no graph file for your `doc_type`, write an empty result
-(`issues: []`, `facts: {}`) and stop — never invent requirements for a type you don't know.
+`workspace_path` is `/docstorage/tmp/{{workflow.uid}}/` in the Argo Workflows context.
 
-## Assembling the document
+## Tools
 
-A document = `index.md` + every file it links to (chapters), + every file those link to via a
-"Содержание" list (sub-sections). A section counts as **present** if it appears in *any* of these
-files. Build one combined heading tree, tracking which file and line each heading came from (needed
-for `position`).
+The repository is **remote** — the worker must never read from the local filesystem.
 
-Recognise a section heading in **any** of these forms — do not look only for `##` markdown headings:
-- a markdown heading (`#`…`######`) at the top of a linked file — its text is the section/subsection
-  name (e.g. a file whose H1 is «Сценарии администрирования»);
-- an item in a "Содержание" / contents list that links to another file — the **link target's own
-  heading** is the section name;
-- a list item or table row acting as a heading in docs that use `• ___Название` style.
+- **`get_single_file(path)`** is the **only** way to obtain file content. Call it with the repo-relative path to read the assigned file, and to check existence of `include`/reference targets (content returned → file exists; error / empty → file missing).
+- No `cat`, no `open()`, no `find`, no local/absolute paths. One worker reads exactly one target file via one `get_single_file` call, plus minimal extra calls only to resolve declared `include`/reference targets.
 
-Never judge one file on its own. On the screen example, `administration-scenarios.md` contains only a
-"Содержание" with links — the real subsections («Сценарий администрирования», «Как определить версию
-продукта») live in the linked files. You must follow those links and take the subsections from the
-target files. Reporting them missing because they are not headings inside `index.md` is the exact bug
-to avoid. Missing-section findings are made against the **assembled** tree, never against one file.
+## Severity & Conditionality Rules (read first)
 
-## Severity & Conditionality Rules (apply before emitting anything)
-
-The report contains **only real problems: ERROR and WARNING**. Do **not** emit `INFO` or
-`SUGGESTION` findings at all — a legitimately-absent section (`std_exception_reason`) or a section
-that didn't exist in this version is simply **not written to the output**, not reported as a note.
+These rules decide the `severity` of a finding. Apply them **before** emitting any issue — they
+exist to avoid false ERRORs on legitimately-absent or generated content.
 
 | Situation | Severity / Action |
 |---|---|
-| Mandatory section missing from the **assembled** tree | `ERROR` (`CVAL-SEC`/`CVAL-SUBSEC`) |
-| Metainfo contains `std_exception_reason` | **suppress** — no finding at all (not even INFO) |
-| Section flagged `cond`, or a note says "при наличии…" | `WARNING` (`CVAL-COND`) or skip — never `ERROR` |
-| Section flagged `version_aware`, didn't exist in this version | **skip** — no finding (no SUGGESTION) |
-| Section flagged `gen` (auto-generated) | do **not** flag as missing |
-| Section present via a linked file | counts as **present** |
-| Marker `uml` but a real raster image instead of a diagram | `WARNING` (`CVAL-UML-IMG`) |
-| Entries under `files` (`lib.json`, `agent.json`, …) | **files, not headings** — never emit `CVAL-SEC` for them |
+| Mandatory section truly missing | `ERROR` |
+| Section legitimately N/A — file metainfo contains `std_exception_reason` | `INFO` (never ERROR). Do not propose deleting the file. |
+| Conditional section absent — note «при наличии…», scope-dependent, or auto-generated | `WARNING` or skip — never `ERROR` |
+| Section did not exist in the document's product version (e.g. появилось после `5.4.0`) | `SUGGESTION` |
+| Section present via `include`/link to another file | count as **present**; instead verify the include target exists |
+| Required `UML` code block replaced by an image | `WARNING` — «ожидается блок-кода UML, присутствует изображение». Not "missing section". |
+| Auto-generated artefact (e.g. `rn-*.json`, компонентный состав = ссылка на JSON-шаблон) | do **not** flag as missing |
+| External / generated resource not stored in repo (e.g. `/info/*.json`, `required-software.json`) | do **not** flag as a missing reference |
 
-A `.drawio` file, a `.puml`/PlantUML block, or an embedded editable diagram **satisfies** marker
-`uml` — it is a UML diagram, not "an image". Only a plain raster screenshot (`.png`/`.jpg`) where a
-diagram is expected triggers `CVAL-UML-IMG`. A link like `logic-diagram.md?display=source` pointing
-at a `.drawio` is a diagram — do not flag it.
+Reporting precision: for every issue include `position` with the line number / range when known.
+For cross-doc-relevant facts (version, СПО, components) always record **where** (section + line)
+so the orchestrator can point to file + section + line.
 
-## Codes you may emit (the full dictionary is not needed)
+### Metainfo handling
 
-| Code | Severity | When | `message` template (Russian) |
+If the file's front-matter / metadata block declares a section/document inapplicable (key
+`std_exception_reason` present) → emit a single `INFO` explaining the section is intentionally
+absent, and suppress the corresponding `ERROR`.
+
+## Document Types
+
+Infer the type from folder/filename/front-matter:
+
+| Type | Russian | Type | Russian |
 |---|---|---|---|
-| `CVAL-SEC` | ERROR | Mandatory section missing | Отсутствует обязательный раздел «{section}» в `{doc}` ({position}). |
-| `CVAL-SUBSEC` | ERROR | Mandatory subsection missing | Отсутствует обязательный подраздел «{subsection}» раздела «{parent}» в `{doc}` ({position}). |
-| `CVAL-NEST` | WARNING | Subsection under the wrong parent | Подраздел «{subsection}» расположен не под «{parent}» в `{doc}` ({position}). |
-| `CVAL-COND` | WARNING | Conditional section absent | Условный раздел «{section}» отсутствует в `{doc}` — зависит от {reason}, не ошибка. |
-| `CVAL-UML-IMG` | WARNING | Raster image instead of a diagram | В разделе «{section}» (`{doc}`, {position}) ожидается UML-диаграмма, присутствует растровое изображение. |
-| `CVAL-INC-IN` | WARNING | Intra-doc edge unsatisfied | Раздел «{section}» (`{doc}`) должен опираться на «{required_section}», но не содержит его. |
-| `CVAL-NOTE` | WARNING | Intra-doc note violated | Не выполнено требование примечания графа для «{section}» (`{doc}`): {note}. |
+| `about` | Описание | `architecture` | Детальная архитектура |
+| `installation-guide` | Руководство по установке | `deployment` | Диаграммы развёртывания |
+| `administration-guide` | Руководство администратора | `release-notes` | Примечания к релизу |
+| `user-guide` | Руководство пользователя | `test-plan` (`pmi`) | Программа и методика испытаний |
+| `developer-guide` | Руководство разработчика | `metadata` (`info`) | Метаданные |
+| `agent-guide` | Руководство прикладного администратора | | |
 
-Formatting: paths/identifiers in backticks, section names in «ёлочки» exactly as spelled in the graph
-file. `{doc}` always starts with `documentation/` and names the **file** the finding is in (index.md
-or the fragment). Drop `({position})` entirely when the position is unknown — never write `(null)`.
-`advice`: imperative, one action, else `null`. Text never changes severity.
+If the file's type is **not** in this list (e.g. `quick-guide`) — do not emit a "missing sections"
+ERROR; emit one `INFO` that the type has no defined mandatory sections in the spec.
 
-## Links: follow them, never validate them
+## Required Sections (per type)
 
-Links exist in this skill for **one purpose only** — to assemble the document (follow them from
-`index.md` and "Содержание" to pull in chapter and sub-section files).
+Markers: `(Table)` table expected · `(UML)` UML code block expected · `(cond)` conditional — see rules · `(gen)` auto-generated — do not hard-fail · `(ref)` content-by-reference.
 
-**You do NOT check whether link targets exist.** Broken-link checking is done by a separate
-deterministic validator, not here. Never emit a finding about a missing or unresolvable link,
-`include` target, image path, or referenced file — no matter how the link looks or where it points
-(other product folders like `CRDN`/`FSGW`/`MFEX`, external URLs, anything). If a link target cannot
-be fetched while assembling the document, just skip that file silently and validate what you did
-assemble.
+#### `about`
+- Назначение · Преимущества · Системные требования
+  - Необходимое программное обеспечение (ref → АС Документация Сотрудники) · Аппаратное обеспечение (Table)
+- Типовые решения (паттерны применения) → Типовое решение
+- Концептуальная модель предметной области (UML) · Основные функции (Table)
+- Варианты и сценарии использования (UML) → Сценарий использования / Сценарий использования n
+- Нефункциональные особенности · Совместимость с выпущенными клиентами
 
-Your findings are about **structure and content**: missing sections, wrong nesting, conditional
-sections, diagrams, intra-document notes. Nothing about link health.
+#### `installation-guide`
+- Подготовка окружения → Подготовка элементов развертывания · Настройка окружения · Выпуск и подготовка сертификатов
+- Установка → Порядок установки · Настройка интеграции (cond)
+- Чек-лист проверки корректности работы
+- Обновление → Изменения в системных требованиях · Изменения в параметрах настройки
+- Откат · Удаление · Часто встречающиеся проблемы и пути их устранения
 
-## Intra-doc edges & notes
+#### `administration-guide`
+- Сценарии администрирования → Как определить версию продукта · Сценарий администрирования
+- Системный журнал → Настройка системного журнала · Доступ к системному журналу · Основные события
+- Мониторинг → Настройка · Метрики (Table)
+- Часто встречающиеся проблемы и пути их устранения
 
-Your graph file may carry `edges` with `scope: intra-doc` (for `architecture`: sections that must
-build on «Компоненты») → `CVAL-INC-IN`, and `notes` with `scope: intra-doc` → `CVAL-NOTE`.
-Notes marked `scope: cross-doc` are **not yours** — edge-checkers handle them; you have no other
-documents.
+#### `user-guide`
+- Доступ к приложению → Запуск приложения · Вход и выход · Порядок доступа · Роли пользователей *(рукописный — НЕ include)*
+- Использование приложения → Сценарий использования · Как определить версию продукта
+- Настройка приложения · Часто встречающиеся проблемы и пути их устранения
+- При наличии интерфейсов взаимодействия конечного пользователя (cond)
 
-## Fact Extraction
+#### `developer-guide`
+- Общие сведения (ref → АС Документация Сотрудники) · lib.json
+- Подключение и конфигурирование · Миграция на текущую версию · Быстрый старт (ссылка на example.zip)
+- Использование → Сценарий использования · Часто встречающиеся проблемы и пути их устранения
+- При наличии библиотеки (клиентский модуль, фреймворк) (cond)
 
-Your graph file lists `facts_to_extract`: exactly the sections whose facts other documents are
-compared against, each with its `fact` type and a `spec` telling you what to pull out. Extract those
-and nothing else. Key each entry by the **section name as spelled in the graph file**.
+#### `security-guide`
+- Идентификация и аутентификация · Авторизация · Безопасность данных · Сетевая безопасность
+- Управление ключами и сертификатами (Table) · Аудит (Table)
+- Правила эксплуатации · Настройки параметров безопасности · Чек-лист валидации настройки механизмов безопасности
+- *(нота, не раздел)* Сведения по ключам и сертификатам должны коррелировать с: Безопасность данных, Сетевая безопасность, Компонентно-логическая диаграмма, Взаимодействия, Диаграммы развертывания — проверяется как note, отсутствие НЕ считать пропущенным разделом
 
-Values are digests — lists of names, or ≤ 15 lines of key statements — **not** the full section text.
-The edge-checker compares only this, so digest quality decides whether cross-document checks work.
+#### `architecture`
+- Структура → Компонентно-логическая диаграмма (UML) · Компоненты (Table) · Программные интерфейсы · Схемы структур данных · Физические модели баз данных · Элементы развертывания (Table) · Диаграммы развертывания (ссылка)
+- Поведение → Взаимодействия (Table) · Диаграммы последовательностей (UML) · Механизмы безопасности · Прочие поведенческие механизмы
+- Прочие аспекты → Сценарии отказа (Table)
+- *Включения внутри документа (проверяет воркер):* Программные интерфейсы → Компоненты; Сценарии отказа → Компоненты; Диаграммы последовательностей → Компоненты (раздел должен опираться на «Компоненты»)
+
+#### `deployment`
+- Типовые варианты развертывания · Вариант развертывания (cond — допустим один типовой вариант, не требовать дубль схем)
+- При наличии отдельных элементов развертывания (сайдкар/агент) (cond)
+
+#### `agent-guide`
+- Общие сведения (ref → АС Документация Сотрудники) · agent.json
+- Установка · Порядок установки · Обновление · Удаление · Часто встречающиеся проблемы и пути их устранения
+
+#### `release-notes`
+- Секция версии продукта · Компонентный состав (gen, ref → JSON-шаблон)
+- Изменение функциональности (cond, gen) · Исправленные ошибки (cond, gen) · Устраненные уязвимости (cond, gen)
+- Обратная совместимость *(рукописный; version-aware → SUGGESTION если не было в версии)*
+- Известные проблемы (рукописный) · Изменения в параметрах установки и настройки (рукописный)
+- Изменения в документации *(рукописный; version-aware → SUGGESTION)*
+
+#### `test-plan` / `pmi`
+- Объект испытаний и требования (ref) · Методы испытаний (ref)
+- Изменение функциональности (cond, gen) · Исправленные ошибки (cond, gen)
+- Регрессионные тесты (ref) *(раздел обязателен по графу; сверку с «Основными функциями» Описания НЕ выполнять — связь убрана из графа)*
+
+#### `metadata` / `info`
+- db-models.json · deployment-units.json *(состав обновлён по графу: только эти два файла)*
+
+## Workflow (single file)
+
+1. **Read** the file via `get_single_file(file_path)` (remote repo — do **not** read local disk).
+2. **Identify** doc type (input hint or inference). Unknown type → INFO, stop section checks.
+3. **Metainfo**: if `std_exception_reason` present → INFO + suppress missing-section errors.
+4. **Section tree (разделы + подразделы)**: build the heading/bullet tree of the file and compare it to the checklist for the type **including nesting** — each top-level section AND its required subsections must exist under the correct parent (e.g. `Мониторинг → Настройка → Метрики (Table)`; `Системный журнал → {Настройка системного журнала, Доступ к системному журналу, Основные события}`). For each missing section/subsection apply the Severity & Conditionality table (`ERROR`/`WARNING`/`SUGGESTION`/skip). A subsection present but under the wrong parent → `WARNING`. **This whole-tree check (раздел и его подразделы) is the worker's job; the orchestrator never inspects intra-document structure.**
+5. **Include resolution**: for every `include` (e.g. `../about/system-requirements.md`), resolve the path relative to `file_path` and verify the target with `get_single_file(resolved_path)` (content → exists; error/empty → missing → `ERROR`). A section satisfied by an include/link counts as present (`Сценарии администрирования` со ссылками на подразделы = present, если подразделы есть по ссылкам).
+6. **Reference integrity**: internal section anchors resolve within the fetched content; for in-repo `.md` references verify the target via `get_single_file`. Skip external/generated resources (`/info/*.json`, `required-software.json`, `rn-*.json`) — do not fetch or flag them.
+7. **Content-type checks**: a block that must be `UML` but is an image → `WARNING` (not missing).
+8. **Notes**: validate the type's note (e.g. `installation-guide` СПО note, `about` functions note, `security-guide` keys note). Conditional notes → not ERROR.
+9. **Extract facts** (compact, for the orchestrator) — see below.
+10. **Write** `output_path` (always, even with empty `issues`).
+
+## Fact Extraction (section-keyed)
+
+Facts let the orchestrator run cross-document edges **without reading files**. `facts` is keyed by
+**section name** (exactly as in the graph); each value is `{ "value", "position" }`. Extract **only
+the sections of this document that are endpoints of a cross-document edge** (list per type below),
+plus `version` if the document declares a product version. `value` is a list or a string. The
+orchestrator compares the two endpoint sections of each edge and cites section + line in the report.
 
 ```json
 {
-  "version":              { "value": "D-6.0.0", "position": "index.md front-matter L4" },
-  "Необходимое программное обеспечение": {
-                            "value": ["python3.11", "postgresql-15"],
-                            "position": "required-software.md L20-31" },
-  "Сценарии отказа":      { "value": ["сбой БД", "потеря сети"], "position": "other-issues.md L120-140" }
+  "version":               { "value": "D-6.0.0", "position": "front-matter L4" },
+  "Системные_требования":  { "value": ["python3.11","postgresql-15"], "position": "L20-31" },
+  "Сценарии_отказа":       { "value": ["сбой БД","потеря сети"],       "position": "L120-140" }
 }
 ```
 
-If a listed section is genuinely absent, set `"value": null` (keep the key).
+### Cross-document endpoint sections to extract, per type
+(only these sections participate in cross-document edges — extract their content as facts; intra-document edges are handled inline at step 4)
 
-## Output
+| Doc type | Sections to extract as facts |
+|---|---|
+| `about` | Системные_требования, Необходимое_программное_обеспечение, Варианты_и_сценарии_использования, Сценарий_использования, Сценарий_использования_n, Нефункциональные_особенности, Совместимость_с_выпущенными_клиентами |
+| `architecture` | Компоненты, Программные_интерфейсы, Физические_модели_баз_данных, Элементы_развертывания, Диаграммы_развертывания, Взаимодействия, Диаграммы_последовательностей, Механизмы_безопасности, Сценарии_отказа |
+| `deployment` | Вариант_развертывания |
+| `installation-guide` | Чек_лист_проверки_корректности_работы, Обновление, `version` |
+| `administration-guide` | Сценарии_администрирования, Сценарий_администрирования, `version` |
+| `user-guide` | Использование_приложения |
+| `security-guide` | Настройки_параметров_безопасности, Авторизация |
+| `agent-guide` | наличие документа (`"present": true`) |
+| `developer-guide` | — (нет кросс-документных рёбер в графе) |
+| `release-notes` | Изменение_функциональности, Исправленные_ошибки, Устраненные_уязвимости, Изменения_в_параметрах_установки_и_настройки, `version` |
+| `test-plan` / `pmi` | Изменение_функциональности, Исправленные_ошибки, `version` |
+| `metadata` / `info` | db-models.json (present), deployment-units.json (present) |
 
-Write to `output_path`. **All JSON field values are strings, even numeric ones; `null` stays `null`.**
+If an endpoint section is absent, set its `value` to `null` (keep `position` null) — the orchestrator
+reports a missing side per the severity rules. Extract values from the same section tree you validated
+at step 4, with the real `position` (line / range).
+
+## Output (per-file file)
+
+> **Все значения полей в JSON сериализуются как строки (тип `string`), даже если значение числовое — например `"position": "42"`. Значение `null` остаётся `null`.**
+
+Write to `{workspace_path}/tmp/document-validator/<file_id>.json`:
 
 ```json
 {
-  "doc": "documentation/documents/installation-guide",
-  "doc_type": "installation-guide",
+  "file": "documentation/documents/developer-guide/index.md",
+  "doc_type": "developer-guide",
   "facts": {},
   "issues": [
     {
-      "code": "CVAL-SEC",
-      "severity": "ERROR",
-      "path": "documentation/documents/installation-guide/index.md",
-      "message": "Отсутствует обязательный раздел «Удаление» в `installation-guide`.",
-      "position": null,
-      "advice": "Добавить раздел «Удаление»"
+      "code": "CVAL-NA",
+      "severity": "INFO",
+      "path": "documentation/documents/developer-guide/lib.json",
+      "message": "Раздел «lib.json» отмечен неприменимым (std_exception_reason) в `developer-guide` — отсутствие ожидаемо.",
+      "position": "front-matter",
+      "advice": null
     }
   ]
 }
 ```
 
-`path` names the specific file the finding is in. `message`/`advice` are written in Russian;
-technical terms and identifiers stay in English.
+### Issue Fields
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `code` | string | Yes | Код правила из `error-codes.md` (семейство `CVAL-*`) |
+| `severity` | enum | Yes | `ERROR` \| `WARNING` \| `INFO` \| `SUGGESTION` |
+| `path` | string | Yes | Путь к файлу с префиксом `documentation/` |
+| `message` | string | Yes | Описание (на русском) |
+| `position` | string\|null | No | Строка/диапазон в источнике |
+| `advice` | string\|null | No | Рекомендация по исправлению |
+
+### Severity Levels
+
+| Level | Description |
+|---|---|
+| `ERROR` | Реально отсутствует обязательный раздел / битый include / битая ссылка |
+| `WARNING` | Условные/автогенерируемые разделы, UML заменён картинкой, терминология |
+| `INFO` | Раздел неприменим по метаинформации, заметки/стиль |
+| `SUGGESTION` | Раздел не существовал в версии документа (например, до 5.4.0) |
+
+## Finding Writing Guidance (как формулировать находки)
+
+Rules for the `message` / `advice` text the worker writes for every issue. Язык — **русский;
+технические термины и идентификаторы на английском** (`include`, `front-matter`, имена секций/файлов).
+
+`message` (что не так):
+- Одно-два предложения по факту: **что** не так и **где** (раздел + `position`). Пример: «Отсутствует обязательный раздел "Откат" в `installation-guide` (L102)».
+- Без модальности/эмоций: «отсутствует», «не разрешается ссылка», «UML заменён изображением» — не «кажется/возможно/к сожалению».
+- Конкретика, а не общее: имя секции/файла/связи, а не «проблема со структурой».
+- Термины/идентификаторы — в backticks; названия разделов — как в графе.
+- Не цитировать большие фрагменты и не дублировать чувствительные значения — ссылаться на место.
+
+`advice` (что сделать):
+- Императив, одно действие: «Добавить подраздел "Метрики (Table)" в Мониторинг», «Вынести "Чек-лист проверки корректности работы" на верхний уровень».
+- Действенно и проверяемо; без «улучшить документацию».
+- Если правка не очевидна/зависит от продукта — `advice: null`, не выдумывать.
+
+Текст находки **не** меняет вердикт — он только описывает выбранную по правилам severity.
+
+Don't: ❌ «Похоже, со структурой что-то не так» → ✅ «Отсутствует раздел "Удаление" в `installation-guide` (L103)». ❌ хвалебные/извинительные вставки, вопросы к читателю, мета-комментарии о процессе.
+
+### Коды находок
+
+Коды, их значения, severity и шаблоны `message`, а также инструкция по плейсхолдерам **не
+дублируются здесь** — они определены в общем файле **`error-codes.md`**, который лежит в корне
+скилла `document-validator/error-codes.md` (один общий для worker и orchestrator) и доступен из
+этого SKILL.md по пути **`../error-codes.md`**. Перед записью каждой находки открой
+`../error-codes.md` и возьми оттуда `code`, шаблон `message` и правила подстановки плейсхолдеров.
+
+### Перечень обязательных секций
+
+Обязательные секции, файлы и уровни требований (`ДОЛЖЕН`/`СЛЕДУЕТ`/`РЕКОМЕНДАЦИЯ`, ID `DOC-*`)
+определены в **`../required-sections.md`** — здесь они не дублируются. Одна секция = один файл,
+поэтому воркер проверяет **содержимое своего файла** (заголовки, требуемые разделы 2–3 уровня,
+таблицы/UML, `include`, ссылки) и кладёт покрытое в факт `covered_sections`. Воркер **не** выдаёт
+«секция отсутствует» — полноту набора файлов в папке типа считает orchestrator.
 
 ## Rules
 
-1. One worker = one document folder. Two repository calls total: `get_single_file` (index.md) +
-   `get_multiple_files` (fragments). No probe fetches, no re-reads.
-2. Judge sections against the **assembled** tree, never against one fragment.
-3. Apply the Severity & Conditionality table before emitting any issue.
-4. Never validate link targets — link checking is out of scope for this skill.
-5. Do not read images or other binary files — this skill validates structure only.
-6. No cross-document comparison; extract facts only.
-7. Always `write_file` to `output_path` (empty `issues` if clean); reply is one confirmation line.
-8. Findings in Russian; identifiers in English; all JSON values as strings.
+1. Validate **only** the assigned `file_path`; one worker = one file.
+2. Apply the Severity & Conditionality table before emitting any issue (избегать ложных ERROR).
+3. Resolve and check `include` targets; sections via include/link count as present.
+4. Do not flag external/generated resources or auto-generated JSON as missing.
+5. Always write `output_path` (empty `issues` if clean) so the orchestrator can confirm completion.
+6. Все значения полей в JSON — строки, даже числовые (`"15"`, не `15`); `null` остаётся `null`.
+7. Output messages in Russian; keep product/technical terms in English.
+
+## Constraints
+
+1. Read **only** via `get_single_file` — never from the local filesystem (no `cat`/`open`/`find`, no local/absolute paths). The repository is remote.
+2. Fetch other files only to resolve declared `include`/reference targets.
+3. Do not perform cross-document consistency (versions, СПО match across docs) — that is the orchestrator's job; only extract `facts`.
+4. Do not write the final report — only the per-file file.
